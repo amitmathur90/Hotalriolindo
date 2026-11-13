@@ -1,15 +1,15 @@
 import { Router } from 'express';
-import { createHmac } from 'node:crypto';
 import { db, json, tx, type Q } from '../db.ts';
 import { hasPermOrApproval, requirePerm, requireStore, requireUser } from '../auth.ts';
-import { HttpError, ah, audit, bad, notFound, notify, num, range } from '../util.ts';
+import { HttpError, ah, audit, bad, notFound, notify, num, range, receiptSig } from '../util.ts';
 import { applyStock, type StockCtx } from '../stock.ts';
 import { emit } from '../realtime.ts';
 import { computeCart, r2, type Discount, type TaxDef } from '../../../shared/pricing.ts';
+import { cleanReceptor, issueDocument, issueRefundNote, kickQueue } from '../hacienda/service.ts';
+import { DEFAULT_RESOLUTION } from '../hacienda/codes.ts';
 
 const r = Router();
-const SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
-export const receiptSig = (id: string) => createHmac('sha256', SECRET).update(`receipt:${id}`).digest('hex').slice(0, 16);
+export { receiptSig };
 
 // ---------------------------------------------------------------- POS catalog (cached offline by the POS)
 r.get('/pos/catalog', requireStore, ah(async (req, res) => {
@@ -36,7 +36,9 @@ r.get('/pos/catalog', requireStore, ah(async (req, res) => {
     db.query(`SELECT * FROM discounts WHERE business_id=$1 AND active ORDER BY name`, [bid]),
     db.query(`SELECT * FROM restaurant_tables WHERE store_id=$1 ORDER BY sort, name`, [sid]),
   ]);
-  res.json({ business, store, categories, products: products.filter((p) => p.variants?.length), modifierGroups, taxes, paymentMethods, discounts, tables, at: new Date().toISOString() });
+  const hs = await db.one(`SELECT enabled, environment FROM hacienda_settings WHERE business_id=$1`, [bid]);
+  const einvoice = { enabled: !!hs?.enabled, environment: hs?.environment ?? null };
+  res.json({ business, store, categories, products: products.filter((p) => p.variants?.length), modifierGroups, taxes, paymentMethods, discounts, tables, einvoice, at: new Date().toISOString() });
 }));
 
 // ---------------------------------------------------------------- line resolution shared by checkout & tickets
@@ -148,6 +150,8 @@ r.post('/sales', requireUser, requirePerm('pos.sell'), requireStore, ah(async (r
   if (existing) return res.json({ ...(await loadSale(existing.id, bid)), duplicate: true });
 
   const offline = !!b.offline;
+  // Hacienda: factura electrónica when the customer gave tax details, otherwise a tiquete electrónico
+  const feReceptor = b.einvoice?.type === 'FE' ? cleanReceptor(b.einvoice.receptor || {}) : null;
   const kitchenOrders: any[] = [];
   const stockCtx: StockCtx = { businessId: bid, storeId, userId: req.auth.userId, allowNegative: true, lowStock: [], conflicts: [] };
 
@@ -229,7 +233,7 @@ r.post('/sales', requireUser, requirePerm('pos.sell'), requireStore, ah(async (r
          subtotal, discount_total, tax_total, service_charge, tip, total, cost_total, paid, change, points_earned, points_redeemed, order_discount, tax_summary,
          note, offline, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, COALESCE($27::timestamptz, now()))
-       RETURNING id`,
+       RETURNING id, created_at`,
       [bid, storeId, b.client_uuid, req.auth.deviceId ?? null, receiptNo, req.auth.userId, customer?.id ?? null, shift?.id ?? null,
        b.dining_option || null, table?.name ?? null, ticket?.name ?? null, cart.subtotal, cart.discount_total, cart.tax_total, cart.service_charge,
        cart.tip, cart.total, costTotal, paid, change, pointsEarned, pointsRedeemed, json(orderDiscount), json(cart.tax_summary), b.note || null,
@@ -266,6 +270,17 @@ r.post('/sales', requireUser, requirePerm('pos.sell'), requireStore, ah(async (r
       if (pointsRedeemed) await q.query(`INSERT INTO loyalty_transactions (business_id, customer_id, sale_id, points, type, user_id) VALUES ($1,$2,$3,$4,'redeem',$5)`, [bid, customer.id, sid, -pointsRedeemed, req.auth.userId]);
     }
 
+    // Electronic invoicing (no-op until enabled in Settings → Hacienda)
+    const edoc = await issueDocument(q, {
+      businessId: bid, storeId, saleId: sid, docType: feReceptor ? '01' : '04', issuedAt: new Date(sale!.created_at), offline,
+      receptor: feReceptor, userId: req.auth.userId,
+    });
+    if (feReceptor && !edoc && !offline) throw bad('La facturación electrónica no está activada (Configuración → Hacienda)');
+    if (feReceptor && customer) {
+      await q.query(`UPDATE customers SET tax_id=$2, id_type=$3, email=COALESCE(NULLIF($4,''), email), activity_code=COALESCE($5, activity_code) WHERE id=$1`,
+        [customer.id, feReceptor.id_number, feReceptor.id_type, feReceptor.email || '', feReceptor.activity_code]);
+    }
+
     // Restaurant: send unsent items to kitchen, close ticket, free table
     const label = ticket?.name || table?.name || `#${receiptNo}`;
     if (b.send_to_kitchen !== false) {
@@ -285,6 +300,7 @@ r.post('/sales', requireUser, requirePerm('pos.sell'), requireStore, ah(async (r
     return sid;
   });
 
+  kickQueue();
   for (const ko of kitchenOrders) emit(`store:${storeId}`, 'kitchen:new', ko);
   for (const ls of stockCtx.lowStock)
     await notify(bid, storeId, ls.qty <= 0 ? 'out_of_stock' : 'low_stock', `${ls.name}: ${ls.qty <= 0 ? 'out of stock' : `low stock (${ls.qty} left)`}`, ls);
@@ -298,17 +314,20 @@ r.post('/sales', requireUser, requirePerm('pos.sell'), requireStore, ah(async (r
 
 export async function loadSale(id: string, businessId: string): Promise<any> {
   const sale = await db.one(
-    `SELECT s.*, u.name AS employee_name, c.name AS customer_name, c.phone AS customer_phone, c.tax_id AS customer_tax_id, c.points AS customer_points, st.name AS store_name,
+    `SELECT s.*, u.name AS employee_name, c.name AS customer_name, c.phone AS customer_phone, c.tax_id AS customer_tax_id, c.email AS customer_email, c.id_type AS customer_id_type, c.points AS customer_points, st.name AS store_name,
             st.address AS store_address, st.phone AS store_phone, st.gstin AS store_gstin, st.gst_mode, st.receipt_header
        FROM sales s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN customers c ON c.id=s.customer_id JOIN stores st ON st.id=s.store_id
       WHERE s.id=$1 AND s.business_id=$2`, [id, businessId]);
   if (!sale) throw notFound('Receipt');
-  const [items, payments, refunds] = await Promise.all([
+  const [items, payments, refunds, e_documents, hs] = await Promise.all([
     db.query(`SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY ctid`, [id]),
     db.query(`SELECT * FROM sale_payments WHERE sale_id=$1`, [id]),
     db.query(`SELECT id, receipt_no, total, created_at, refund_reason FROM sales WHERE original_sale_id=$1 ORDER BY created_at`, [id]),
+    db.query(`SELECT id, doc_type, clave, consecutivo, status, message, issued_at, receptor, reference, replaced_by, emailed_at, environment
+                FROM e_documents WHERE sale_id=$1 ORDER BY created_at`, [id]),
+    db.one(`SELECT resolution_text FROM hacienda_settings WHERE business_id=$1`, [businessId]),
   ]);
-  return { ...sale, items, payments, refunds, share_sig: receiptSig(id) };
+  return { ...sale, items, payments, refunds, e_documents, e_resolution: e_documents.length ? hs?.resolution_text || DEFAULT_RESOLUTION : null, share_sig: receiptSig(id) };
 }
 
 // ---------------------------------------------------------------- Receipts / history
@@ -440,9 +459,12 @@ r.post('/sales/:id/refund', requireUser, ah(async (req, res) => {
       if (ptsBack) await q.query(`INSERT INTO loyalty_transactions (business_id, customer_id, sale_id, points, type, user_id, note) VALUES ($1,$2,$3,$4,'refund',$5,'Earned points reversed')`, [bid, sale.customer_id, ref!.id, -ptsBack, req.auth.userId]);
     }
     await q.query(`UPDATE sales SET status=$2 WHERE id=$1`, [sale.id, fullyRefunded ? 'refunded' : 'partially_refunded']);
+    // Nota de crédito electrónica referencing the sale's tiquete / factura
+    await issueRefundNote(q, { businessId: bid, storeId: sale.store_id, refundSaleId: ref!.id, originalSaleId: sale.id, full: fullyRefunded, reason: b.reason, userId: req.auth.userId });
     await audit(req, 'refund', 'sales', ref!.id, { original: sale.receipt_no, amount, reason: b.reason, approved_by: approval.approver }, q);
     return ref!.id;
   });
+  kickQueue();
   emit(`business:${bid}`, 'sale:created', { id: refundId, type: 'refund' });
   res.status(201).json(await loadSale(refundId, bid));
 }));

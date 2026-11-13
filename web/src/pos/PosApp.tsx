@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { applyAutoprintParam } from '../components/PrinterSetup';
 import { Link } from 'react-router-dom';
 import { Clock } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
@@ -15,6 +16,8 @@ export interface QueuedSale { payload: any; token: string; local: any; error?: s
 
 const DEVICE_KEY = 'its.pos.device';
 const SESSION_KEY = 'its.pos.session';
+
+applyAutoprintParam('pos'); // launcher opens /pos?autoprint=1
 
 export default function PosApp() {
   const [device, setDevice] = useState<PosDevice | null>(() => JSON.parse(localStorage.getItem(DEVICE_KEY) || 'null'));
@@ -135,7 +138,7 @@ function DeviceSetup({ onDone }: { onDone: (d: PosDevice) => void }) {
   return (
     <div className="flex min-h-full items-center justify-center bg-slate-900 p-4">
       <div className="card w-full max-w-sm space-y-4 p-6">
-        <div className="flex items-center gap-2"><img src="/icon.svg" className="h-8 w-8" alt="" /><div className="font-bold">ITS POS · Set up this terminal</div></div>
+        <div className="flex items-center gap-2"><img src="/icon.svg" className="h-8 w-8" alt="" /><div className="font-bold">Rio Lindo POS · Set up this terminal</div></div>
         {step === 'login' ? (
           <form onSubmit={login} className="space-y-3">
             <p className="text-sm text-slate-500">An owner or manager signs in once to register this device.</p>

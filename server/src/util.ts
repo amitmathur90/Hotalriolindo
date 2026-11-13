@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { Request } from 'express';
 import { db, json, type Q } from './db.ts';
 import { emit } from './realtime.ts';
@@ -57,3 +58,7 @@ export function range(req: Request) {
   const to = req.query.to ? new Date(String(req.query.to)) : new Date(from.getTime() + 86400000);
   return { from: from.toISOString(), to: to.toISOString() };
 }
+
+/** Signature for public digital-receipt links (/r/:id/:sig) so receipts can't be enumerated. */
+export const receiptSig = (id: string) =>
+  createHmac('sha256', process.env.JWT_SECRET || 'dev-only-change-me').update(`receipt:${id}`).digest('hex').slice(0, 16);

@@ -2,7 +2,7 @@ import { createContext, lazy, Suspense, useContext, useEffect, useState } from '
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, Receipt, Package, Boxes, Truck, Users, UserCog, Wallet, Settings, ShieldCheck, Building2,
-  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X,
+  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X, Landmark,
 } from 'lucide-react';
 import { bo, boApi } from '../lib/api';
 import { setCurrency, dt } from '../lib/format';
@@ -20,6 +20,7 @@ const Employees = lazy(() => import('./pages/Employees'));
 const Cash = lazy(() => import('./pages/Cash'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const Audit = lazy(() => import('./pages/Audit'));
+const Hacienda = lazy(() => import('./pages/Hacienda'));
 const Admin = lazy(() => import('./pages/Admin'));
 
 export interface Session {
@@ -45,6 +46,7 @@ const NAV = [
   { to: 'customers', label: 'Customers', icon: Users, perm: 'customers.manage' },
   { to: 'employees', label: 'Employees', icon: UserCog, perm: 'employees.manage' },
   { to: 'cash', label: 'Shifts & Cash', icon: Wallet, perm: 'reports.view' },
+  { to: 'hacienda', label: 'Hacienda', icon: Landmark, perm: 'reports.view' },
   { to: 'settings', label: 'Settings', icon: Settings, perm: 'settings.manage' },
   { to: 'audit', label: 'Audit log', icon: ShieldCheck, perm: 'audit.view' },
 ];
@@ -98,7 +100,7 @@ export default function BackOffice() {
       <div className="mb-4 flex items-center gap-2 px-2 pt-1">
         <img src="/icon.svg" className="h-8 w-8" alt="" />
         <div className="min-w-0">
-          <div className="font-bold tracking-tight">ITS POS</div>
+          <div className="font-bold tracking-tight">Rio Lindo POS</div>
           <div className="truncate text-xs text-slate-500">{s.business?.name || 'Platform'}</div>
         </div>
       </div>
@@ -176,6 +178,7 @@ export default function BackOffice() {
                 <Route path="cash" element={<Cash />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="audit" element={<Audit />} />
+                <Route path="hacienda" element={<Hacienda />} />
                 <Route path="admin" element={<Admin />} />
                 <Route path="*" element={<Navigate to={home} replace />} />
               </Routes>

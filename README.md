@@ -50,6 +50,34 @@ node server/scripts/e2e.mjs http://localhost:4100
 
 The end-to-end script exercises the PRD acceptance criteria: 46 checks covering sales, split payments, idempotent offline sync, stock deduction, permissions and manager overrides, refunds, loyalty, tables and kitchen, split bills, POs, transfers, shift cash, report reconciliation and the audit trail.
 
+### Hacienda tests
+
+```bash
+npx tsx server/scripts/hacienda-selftest.ts ./out          # builds + signs a tiquete, factura and nota de crédito (offline)
+npx tsx server/scripts/hacienda-mock.ts 4199               # local stand-in for Hacienda's IDP and API de Recepción
+# fresh database, pointed at the mock:
+PORT=4100 PGLITE_DIR=./data/test-hk HACIENDA_IDP_URL=http://localhost:4199/token \
+  HACIENDA_API_URL=http://localhost:4199/recepcion/v1/ HACIENDA_POLL_MS=1000 HACIENDA_RETRY_BASE_S=1 npm start -w server
+node server/scripts/hacienda-e2e.mjs http://localhost:4100 http://localhost:4199   # 43 checks
+```
+
+## Single hotel mode
+
+By default the system runs for one business, **Hotel Rio Lindo**: public sign-up is closed (on an empty database `/register` is a one-time setup of the owner account), there is no platform super admin (any left over from SaaS mode is disabled at startup) and the app is branded *Rio Lindo POS*. Set `MULTI_TENANT=true` to run it as a multi-business SaaS again.
+
+## Costa Rica electronic invoicing (Hacienda v4.4)
+
+Back Office → **Hacienda**.
+
+* **Every sale** issues a *tiquete electrónico* (04). Its consecutivo (`001-00001-04-0000000001`) and 50-digit clave are reserved inside the sale transaction and printed on the receipt immediately.
+* **Factura electrónica** (01): tick *Factura electrónica* on the POS payment screen and enter the customer's identification (física 9 digits, jurídica 10, DIMEX 11–12, NITE 10), name and e-mail. The details are saved on the customer for next time. For a sale that already has a tiquete, open the receipt → *Factura electrónica (datos del cliente)*: the tiquete is annulled with a nota de crédito and a factura is issued in its place.
+* **Refunds** issue a *nota de crédito electrónica* (03) that references the original tiquete/factura (code 01 for a full refund, 06 for a partial return).
+* A background queue signs each document (XAdES-EPES with the *llave criptográfica*), sends it to Hacienda's *API de Recepción*, and checks the result. Network failures are retried with back-off, so the POS never waits for Hacienda. Offline sales are issued with *situación 3* when they sync.
+* Rejected documents and errors appear in Hacienda → Comprobantes, with Hacienda's message, and as a notification. *Reintentar* resends a document after a fix (e.g. a missing CABYS code). *Reemitir* issues a new document with a new clave.
+* Accepted facturas are e-mailed to the customer with the XML and Hacienda's response when SMTP is configured (see `server/.env.example`).
+
+**Setup:** enter the emisor details (razón social, cédula, actividad económica, provincia/cantón/distrito, e-mail), the ATV API user and password, and upload the `.p12` key with its PIN. Use *Probar conexión y firma*, then activate in **Pruebas** (sandbox) first. Switch to **Producción** only after documents are accepted in sandbox. Each product needs a 13-digit **CABYS** code, set on the product, its category, or as the default. The secrets are stored encrypted with a key derived from `JWT_SECRET`.
+
 ## Project layout
 
 ```

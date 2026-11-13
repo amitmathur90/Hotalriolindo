@@ -451,3 +451,59 @@ ALTER TABLE businesses ADD COLUMN IF NOT EXISTS locale text NOT NULL DEFAULT 'en
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS tax_id_label text NOT NULL DEFAULT 'GSTIN';
 ALTER TABLE businesses ADD COLUMN IF NOT EXISTS terms text;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS tax_id text;
+
+-- Costa Rica electronic invoicing (Hacienda, comprobantes electrónicos v4.4)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS id_type text;             -- 01 física | 02 jurídica | 03 DIMEX | 04 NITE | 05 extranjero
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS activity_code text;       -- receptor's economic activity (optional on facturas)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS cabys text;                -- 13-digit CABYS code
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS cabys text;              -- default CABYS for the category's products
+ALTER TABLE stores ADD COLUMN IF NOT EXISTS hacienda_branch text;        -- sucursal (3 digits) in the consecutivo
+
+CREATE TABLE IF NOT EXISTS hacienda_settings (
+  business_id uuid PRIMARY KEY REFERENCES businesses(id) ON DELETE CASCADE,
+  enabled boolean NOT NULL DEFAULT false,
+  environment text NOT NULL DEFAULT 'stag',          -- stag (pruebas) | prod (producción)
+  legal_name text, trade_name text,
+  id_type text NOT NULL DEFAULT '02', id_number text,
+  activity_code text, provider_id text,
+  provincia text, canton text, distrito text, barrio text, otras_senas text,
+  phone text, email text,
+  default_cabys text,
+  resolution_text text,
+  api_username text, api_password_enc text,
+  cert_p12_enc text, cert_pin_enc text, cert_subject text, cert_expires_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hacienda_sequences (
+  business_id uuid NOT NULL, environment text NOT NULL, branch text NOT NULL, terminal text NOT NULL, doc_type text NOT NULL,
+  last bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (business_id, environment, branch, terminal, doc_type)
+);
+
+CREATE TABLE IF NOT EXISTS e_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL, store_id uuid NOT NULL,
+  sale_id uuid NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  doc_type text NOT NULL,                            -- 01 factura | 03 nota de crédito | 04 tiquete
+  environment text NOT NULL,
+  clave text NOT NULL UNIQUE, consecutivo text NOT NULL,
+  situacion text NOT NULL DEFAULT '1',
+  issued_at timestamptz NOT NULL,
+  receptor jsonb,                                    -- {nombre, id_type, id_number, email, activity_code}
+  reference jsonb,                                   -- {doc_id, doc_type, clave, issued_at, code, reason}
+  status text NOT NULL DEFAULT 'pending',            -- pending | sent | accepted | rejected | error
+  message text,
+  attempts integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  total numeric,
+  xml_signed text, response_xml text,
+  replaced_by uuid,                                  -- tiquete annulled and replaced by a factura
+  emailed_at timestamptz, email_error text,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS e_documents_sale_idx ON e_documents(sale_id);
+CREATE INDEX IF NOT EXISTS e_documents_queue_idx ON e_documents(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS e_documents_business_idx ON e_documents(business_id, created_at);

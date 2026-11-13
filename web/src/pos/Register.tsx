@@ -15,11 +15,13 @@ import { SaleDetail } from '../components/SaleDetail';
 import { gstSplit } from '../../../shared/pricing';
 import { DINING, cartFromTicket, emptyCart, makeLine, priceCart, toPayload, type Cart, type CartLine } from './cart';
 import { ApprovalModal, CustomerPicker, DiscountPicker, ItemOptions, KitchenTicket, LineEditor, PaymentModal, ShiftPanel, TablesPanel, TicketsPanel } from './dialogs';
+import { PrinterSetup, hwSettings } from '../components/PrinterSetup';
+import { printNow } from '../components/KitchenTicket';
 import type { PosDevice, PosSession, QueuedSale } from './PosApp';
 
 const PERM_LABEL: Record<string, string> = { 'pos.discount': 'Apply a discount', 'pos.custom_price': 'Change an item price', 'pos.void': 'Remove items already sent to the kitchen', 'pos.refund': 'Refund a sale' };
 const APPROVAL_KEY: Record<string, string> = { 'pos.discount': 'discount', 'pos.custom_price': 'price', 'pos.void': 'void' };
-const hw = () => JSON.parse(localStorage.getItem('its.hardware') || '{}');
+const hw = hwSettings;
 
 export default function Register({ api, device, session, catalog, reloadCatalog, online, queue, enqueue, syncNow, socket, onLock }: {
   api: Client; device: PosDevice; session: PosSession; catalog: any; reloadCatalog: () => void; online: boolean; queue: QueuedSale[];
@@ -171,12 +173,12 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
       toast(e instanceof ApiError && e.offline ? 'Open tickets need a connection' : e.message, 'err');
     }
   }
-  function printKitchen(label: string, lines: CartLine[]) {
+  function printKitchen(label: string, lines: CartLine[], dining = cart.dining_option, delay = 0) {
     const stations = [...new Set(lines.map((l) => l.kitchen_station))];
     stations.forEach((st, i) => setTimeout(() => {
-      setKitchenPrint({ station: st, label, dining: cart.dining_option, items: lines.filter((l) => l.kitchen_station === st).map((l) => ({ qty: l.qty, name: l.name + (l.variant_name ? ` (${l.variant_name})` : ''), modifiers: l.modifiers.map((m) => m.name), note: l.note })) });
-      setTimeout(() => { window.print(); setKitchenPrint(null); }, 80);
-    }, i * 600));
+      setKitchenPrint({ station: st, label, dining, items: lines.filter((l) => l.kitchen_station === st).map((l) => ({ qty: l.qty, name: l.name + (l.variant_name ? ` (${l.variant_name})` : ''), modifiers: l.modifiers.map((m) => m.name), note: l.note })) });
+      setTimeout(() => { printNow('kitchen'); setKitchenPrint(null); }, 80);
+    }, delay + i * 700));
   }
   function openTicket(t: any) {
     setCart(cartFromTicket(t, catalog));
@@ -197,16 +199,20 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
     if (!cart.items.length) return;
     setDlg('pay');
   }
-  async function pay(payments: any[]) {
+  async function pay(payments: any[], _tip = 0, einvoice: any = null) {
     const client_uuid = uuid();
     const base = {
       client_uuid, items: toPayload(cart), order_discount: cart.order_discount ? { type: cart.order_discount.type, value: cart.order_discount.value, discount_id: cart.order_discount.discount_id } : null,
       customer_id: cart.customer?.id ?? null, payments: payments.map((p) => ({ method_id: p.method_id, method_type: p.method_type, amount: p.amount, reference: p.reference })),
       dining_option: cart.dining_option, table_id: cart.table_id, ticket_id: cart.ticket_id, tip: cart.tip, note: cart.note,
+      ...(einvoice ? { einvoice } : {}),
     };
+    const unsentKitchen = cart.items.filter((l) => !l.sent && l.kitchen_station);
+    const dining = cart.dining_option;
     try {
       const sale = await withApproval((approvals) => api('/sales', { body: { ...base, approvals } }));
       finishSale(sale);
+      if (hw().kitchenPrint && unsentKitchen.length) printKitchen(sale.table_name || sale.ticket_name || `#${sale.receipt_no}`, unsentKitchen, dining, 900);
     } catch (e: any) {
       if (!(e instanceof ApiError && e.offline)) { toast(e.message, 'err'); return; }
       // Offline: queue for sync and print a provisional receipt
@@ -224,6 +230,7 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
       };
       await enqueue({ ...base, offline: true, created_at }, local);
       finishSale(local);
+      if (hw().kitchenPrint && unsentKitchen.length) printKitchen(local.receipt_no, unsentKitchen, dining, 900);
       toast('Offline — sale saved and will sync automatically', 'info');
     }
   }
@@ -233,7 +240,7 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
     setCart(emptyCart(cart.dining_option));
     setMobileCart(false);
     loadTickets();
-    if (hw().autoPrint ?? true) setTimeout(() => window.print(), 150);
+    if (hw().autoPrint ?? true) setTimeout(() => printNow('receipt'), 150);
     if (sale.id) reloadCatalog();
   }
 
@@ -364,6 +371,7 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
               ...(catalog.tables.length ? [{ icon: LayoutGrid, label: 'Tables', act: () => setDlg('tables') }] : []),
               { icon: Wallet, label: 'Shift & cash drawer', act: () => setDlg('shift') },
               { icon: Monitor, label: 'Customer display', act: () => setDlg('display') },
+              { icon: Printer, label: 'Printer setup', act: () => setDlg('printer') },
               { icon: RefreshCw, label: `Sync (${queue.length} pending)`, act: () => setDlg('sync') },
               { icon: Moon, label: 'Dark / light mode', act: () => toggleTheme() },
               ...(can('backoffice.access') ? [{ icon: Building2, label: 'Back Office', act: () => window.open('/backoffice', '_blank') }] : []),
@@ -385,7 +393,7 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
       )}
       {dlg === 'customer' && <CustomerPickerWrap api={api} bid={session.business.id} onPick={(c) => { setCart({ ...cart, customer: c }); setDlg(null); }} onClose={() => setDlg(null)} />}
       {dlg === 'discount' && <DiscountPicker discounts={catalog.discounts} current={cart.order_discount} onClose={() => setDlg(null)} onPick={(d) => { setCart({ ...cart, order_discount: d }); setDlg(null); }} />}
-      {dlg === 'pay' && <PaymentModal total={priced.total} methods={catalog.paymentMethods} customer={cart.customer} business={biz} offline={!online} onPay={pay} onClose={() => setDlg(null)} onStage={() => {}} />}
+      {dlg === 'pay' && <PaymentModal total={priced.total} methods={catalog.paymentMethods} customer={cart.customer} business={biz} offline={!online} einvoice={catalog.einvoice} onPay={pay} onClose={() => setDlg(null)} onStage={() => {}} />}
       {dlg === 'shift' && <ShiftPanel api={api} can={can} onClose={() => setDlg(null)} />}
       {dlg === 'tickets' && <TicketsPanel api={api} canMerge={can('pos.sell')} onOpen={openTicket} onClose={() => setDlg(null)} />}
       {dlg === 'tables' && (
@@ -399,7 +407,12 @@ export default function Register({ api, device, session, catalog, reloadCatalog,
       {dlg === 'split' && cart.ticket_id && <SplitDialog api={api} cart={cart} priced={priced} onClose={() => setDlg(null)} onDone={(t) => { loadTickets(); setDlg(null); openTicket(t); }} />}
       {approval && <ApprovalModal perm={approval.perm} label={PERM_LABEL[approval.perm] || approval.perm} api={api} onDone={(t) => { approval.resolve(t); setApproval(null); }} />}
       {done && <DoneModal sale={done} business={biz} onClose={() => setDone(null)} />}
-      {kitchenPrint && <div className="fixed -left-[9999px]"><KitchenTicket data={kitchenPrint} /></div>}
+      {kitchenPrint && <div className="hidden print:block"><KitchenTicket data={kitchenPrint} /></div>}
+      {dlg === 'printer' && (
+        <Modal open onClose={() => setDlg(null)} title="Impresora de recepción" size="lg">
+          <PrinterSetup kind="pos" onTestPrint={() => printKitchen('PRUEBA DE IMPRESIÓN', [{ line_id: 't', name: 'Impresora conectada correctamente', qty: 1, modifiers: [], kitchen_station: 'Recepción' } as any])} />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -420,7 +433,7 @@ function DoneModal({ sale, business, onClose }: { sale: any; business: any; onCl
           <div className="text-sm text-slate-500">{sale.offline && !sale.id ? 'Saved offline' : 'Sale complete'}</div>
           {Number(sale.change) > 0 ? <><div className="text-sm text-slate-500">Change due</div><div className="text-5xl font-bold text-emerald-600">{money(sale.change)}</div></> : <div className="text-4xl font-bold">{money(sale.total)}</div>}
           {Number(sale.points_earned) > 0 && <div className="text-sm text-amber-600">+{sale.points_earned} loyalty points</div>}
-          <button className="btn-secondary mt-2" onClick={() => window.print()}><Printer size={16} />Print</button>
+          <button className="btn-secondary mt-2" onClick={() => printNow('receipt')}><Printer size={16} />Print</button>
           <ReceiptShare sale={sale} business={business} receiptRef={ref} />
           <button className="btn-primary h-14 text-lg" onClick={onClose} autoFocus><Plus />New sale</button>
         </div>

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Store, MonitorSmartphone, ChefHat } from 'lucide-react';
 import { bo, boApi } from '../lib/api';
 import { Field, useToast } from '../components/ui';
@@ -7,7 +7,9 @@ import { Field, useToast } from '../components/ui';
 export default function Login({ mode }: { mode: 'login' | 'register' }) {
   const nav = useNavigate();
   const toast = useToast();
-  const [f, setF] = useState({ email: '', password: '', businessName: '', ownerName: '', phone: '', country: 'CR' });
+  const [f, setF] = useState({ email: '', password: '', businessName: 'Hotel Rio Lindo', ownerName: '', phone: '', country: 'CR' });
+  const [cfg, setCfg] = useState<{ app_name: string; multi_tenant: boolean; setup_needed: boolean; demo: boolean } | null>(null);
+  useEffect(() => { boApi('/public/config').then(setCfg).catch(() => setCfg(null)); }, []);
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
 
@@ -26,26 +28,35 @@ export default function Login({ mode }: { mode: 'login' | 'register' }) {
     }
   }
 
+  // Single-hotel mode: sign-up only exists as the one-time first-run setup.
+  if (cfg && !cfg.multi_tenant) {
+    if (mode === 'register' && !cfg.setup_needed) return <Navigate to="/login" replace />;
+    if (mode === 'login' && cfg.setup_needed) return <Navigate to="/register" replace />;
+  }
+  const single = cfg ? !cfg.multi_tenant : true;
+
   return (
     <div className="flex min-h-full items-center justify-center bg-gradient-to-br from-brand-700 via-brand-800 to-slate-900 p-4">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center justify-center gap-3 text-white">
           <img src="/icon.svg" className="h-11 w-11" alt="" />
           <div>
-            <div className="text-2xl font-bold tracking-tight">ITS POS</div>
-            <div className="text-sm text-brand-100">Retail & restaurant management</div>
+            <div className="text-2xl font-bold tracking-tight">{single ? 'Hotel Rio Lindo' : 'ITS POS'}</div>
+            <div className="text-sm text-brand-100">{single ? 'Punto de venta · Restaurante y Bar' : 'Retail & restaurant management'}</div>
           </div>
         </div>
         <form onSubmit={submit} className="card space-y-4 p-6">
-          <h1 className="text-lg font-semibold">{mode === 'login' ? 'Sign in to Back Office' : 'Create your business account'}</h1>
+          <h1 className="text-lg font-semibold">{mode === 'login' ? 'Sign in to Back Office' : single ? 'First-time setup — create the owner account' : 'Create your business account'}</h1>
           {mode === 'register' && (
             <>
               <Field label="Business name"><input className="input" required value={f.businessName} onChange={set('businessName')} /></Field>
               <Field label="Your name"><input className="input" required value={f.ownerName} onChange={set('ownerName')} /></Field>
               <Field label="Phone"><input className="input" value={f.phone} onChange={set('phone')} /></Field>
-              <Field label="Country" hint="Sets currency, taxes, payment types and receipt language">
-                <select className="input" value={f.country} onChange={set('country')}><option value="CR">Costa Rica (₡, IVA 13%)</option><option value="IN">India (₹, GST)</option></select>
-              </Field>
+              {!single && (
+                <Field label="Country" hint="Sets currency, taxes, payment types and receipt language">
+                  <select className="input" value={f.country} onChange={set('country')}><option value="CR">Costa Rica (₡, IVA 13%)</option><option value="IN">India (₹, GST)</option></select>
+                </Field>
+              )}
             </>
           )}
           <Field label="Email"><input className="input" type="email" required autoComplete="email" value={f.email} onChange={set('email')} /></Field>
@@ -53,10 +64,12 @@ export default function Login({ mode }: { mode: 'login' | 'register' }) {
             <input className="input" type="password" required minLength={6} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={f.password} onChange={set('password')} />
           </Field>
           <button className="btn-primary w-full py-2.5" disabled={busy}>{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}</button>
-          <div className="text-center text-sm text-slate-500">
-            {mode === 'login' ? <>New business? <Link className="font-medium text-brand-700" to="/register">Create an account</Link></> : <>Have an account? <Link className="font-medium text-brand-700" to="/login">Sign in</Link></>}
-          </div>
-          {mode === 'login' && (
+          {!single && (
+            <div className="text-center text-sm text-slate-500">
+              {mode === 'login' ? <>New business? <Link className="font-medium text-brand-700" to="/register">Create an account</Link></> : <>Have an account? <Link className="font-medium text-brand-700" to="/login">Sign in</Link></>}
+            </div>
+          )}
+          {mode === 'login' && cfg?.demo && (
             <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-800">
               Demo: <b>owner@demo.com</b> / <b>demo123</b> · POS PINs: owner 1111, manager 2222, cashier 3333, kitchen 4444
             </div>

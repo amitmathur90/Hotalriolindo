@@ -4,6 +4,7 @@ import { bo, boApi } from '../../lib/api';
 import { dt } from '../../lib/format';
 import { imageToDataUrl } from '../../lib/misc';
 import { Badge, Empty, Field, PageHeader, Tabs, Toggle, useAsync, useToast } from '../../components/ui';
+import { downloadLauncher } from '../../components/PrinterSetup';
 import { useSession } from '../BackOffice';
 import { CrudPage } from '../widgets';
 
@@ -187,6 +188,14 @@ function Hardware() {
         <Toggle checked={hw.autoPrint ?? true} onChange={(v) => set('autoPrint', v)} label="Print receipt automatically after payment" />
         <Toggle checked={hw.kitchenPrint ?? false} onChange={(v) => set('kitchenPrint', v)} label="Print kitchen ticket when order is sent" />
         <p className="text-xs text-slate-500">USB, network and Bluetooth thermal printers are used through the operating system's printer driver (set as default printer, margins “none”). Cash drawers connected to the receipt printer open on each print (enable “open drawer” in the printer driver).</p>
+        <div className="rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800">
+          <div className="font-medium">Automatic printing (no print dialog)</div>
+          <p className="mt-1 text-xs text-slate-500">Connect the printer to the PC (Windows installs the driver), set it as the default printer, then run the launcher on that PC. It opens the POS or Kitchen Display with silent printing and starts with Windows.</p>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button className="btn-secondary text-xs" onClick={() => downloadLauncher('pos')}><Download size={14} />Reception launcher</button>
+            <button className="btn-secondary text-xs" onClick={() => downloadLauncher('kds')}><Download size={14} />Kitchen launcher</button>
+          </div>
+        </div>
         <button className="btn-secondary" onClick={() => window.print()}>Print test page</button>
       </div>
       <div className="card space-y-3 p-5">

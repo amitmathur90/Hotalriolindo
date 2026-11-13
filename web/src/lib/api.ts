@@ -4,7 +4,7 @@ export class ApiError extends Error {
   }
 }
 
-export type Client = <T = any>(path: string, opts?: { method?: string; body?: any; headers?: Record<string, string> }) => Promise<T>;
+export type Client = <T = any>(path: string, opts?: { method?: string; body?: any; headers?: Record<string, string>; text?: boolean }) => Promise<T>;
 
 /** Creates an API client bound to a token + store provider. */
 export function makeClient(getToken: () => string | null, getStore: () => string | null = () => null, onUnauthorized?: () => void): Client {
@@ -24,12 +24,14 @@ export function makeClient(getToken: () => string | null, getStore: () => string
     } catch {
       throw new ApiError(0, 'No connection to server', true);
     }
-    const data = await res.json().catch(() => null);
+    const raw = await res.text().catch(() => '');
+    let data: any = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
     if (!res.ok) {
       if (res.status === 401) onUnauthorized?.();
       throw new ApiError(res.status, data?.error || res.statusText, res.status >= 502);
     }
-    return data;
+    return (opts.text ? raw : data) as any; // text: raw body, e.g. XML downloads
   };
 }
 

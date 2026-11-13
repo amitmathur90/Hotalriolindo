@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import type { Client } from '../lib/api';
 import { dt, money, qty as fq } from '../lib/format';
 import { Badge, Empty, Field, Keypad, Modal, SearchInput, Spinner, useToast } from '../components/ui';
+import { ReceptorForm, receptorError, receptorFromCustomer, type ReceptorInput } from '../components/EInvoice';
 import { ShiftReport } from '../backoffice/pages/Cash';
 import type { CartLine } from './cart';
 
@@ -206,11 +207,15 @@ export function ApprovalModal({ perm, label, api, onDone }: { perm: string; labe
 }
 
 // ---------------------------------------------------------------- Payment
-export function PaymentModal({ total, methods, customer, business, offline, onPay, onClose, onStage }: {
-  total: number; methods: any[]; customer: any; business: any; offline: boolean;
-  onPay: (payments: any[], tip: number) => Promise<void>; onClose: () => void; onStage: (s: any) => void;
+export function PaymentModal({ total, methods, customer, business, offline, einvoice, onPay, onClose, onStage }: {
+  total: number; methods: any[]; customer: any; business: any; offline: boolean; einvoice?: { enabled: boolean; environment: string | null };
+  onPay: (payments: any[], tip: number, einvoice?: { type: 'FE'; receptor: ReceptorInput } | null) => Promise<void>; onClose: () => void; onStage: (s: any) => void;
 }) {
   const [pays, setPays] = useState<any[]>([]);
+  // Hacienda: factura electrónica instead of a tiquete when the customer asks for one
+  const [fe, setFe] = useState(false);
+  const [receptor, setReceptor] = useState<ReceptorInput>(() => receptorFromCustomer(customer));
+  const feError = fe ? receptorError(receptor) : null;
   const [amount, setAmount] = useState('');
   const [ref, setRef] = useState('');
   const [busy, setBusy] = useState(false);
@@ -238,7 +243,7 @@ export function PaymentModal({ total, methods, customer, business, offline, onPa
   };
   async function finish() {
     setBusy(true);
-    try { await onPay(pays, 0); } finally { setBusy(false); }
+    try { await onPay(pays, 0, fe ? { type: 'FE', receptor } : null); } finally { setBusy(false); }
   }
   const usable = methods.filter((m) => !offline || ['cash', 'card', 'upi', 'bank', 'other'].includes(m.type));
   return (
@@ -274,7 +279,18 @@ export function PaymentModal({ total, methods, customer, business, offline, onPa
             ))}
             {!pays.length && <div className="px-3 py-4 text-center text-sm text-slate-400">Choose a payment method. Split across several methods if needed.</div>}
           </div>
-          <button className="btn-primary h-14 w-full text-lg" disabled={remaining > 0 || busy} onClick={finish}>
+          {einvoice?.enabled && (
+            <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                <input type="checkbox" className="h-4 w-4" checked={fe} onChange={(e) => setFe(e.target.checked)} />
+                Factura electrónica (cliente con cédula)
+              </label>
+              {fe && <div className="mt-2"><ReceptorForm value={receptor} onChange={setReceptor} /></div>}
+              {fe && feError && <p className="mt-1 text-xs text-rose-600">{feError}</p>}
+              {!fe && <p className="mt-1 text-xs text-slate-400">Sin marcar se emite tiquete electrónico.</p>}
+            </div>
+          )}
+          <button className="btn-primary h-14 w-full text-lg" disabled={remaining > 0 || busy || !!feError} onClick={finish}>
             {busy ? <Spinner /> : <Check />}Complete sale{change > 0 ? ` · change ${money(change)}` : ''}
           </button>
         </div>
@@ -393,17 +409,4 @@ export function TablesPanel({ tables, tickets, onPick, onClose, api, onChanged }
   );
 }
 
-/** Kitchen ticket print layout (used when kitchen printing is enabled). */
-export function KitchenTicket({ data }: { data: any }) {
-  return (
-    <div className="print-area font-mono text-[13px] text-black">
-      <div className="text-center text-base font-bold">{data.station?.toUpperCase() || 'KITCHEN'}</div>
-      <div className="text-center font-bold">{data.label}</div>
-      <div className="text-center">{new Date().toLocaleTimeString()} · {String(data.dining || '').replace('_', ' ')}</div>
-      <div className="my-1 border-t border-dashed border-black" />
-      {data.items.map((i: any, k: number) => (
-        <div key={k} className="mb-1"><b>{fq(i.qty)} × {i.name}</b>{i.modifiers?.map((m: string) => <div key={m} className="pl-3">+ {m}</div>)}{i.note && <div className="pl-3">** {i.note}</div>}</div>
-      ))}
-    </div>
-  );
-}
+export { KitchenTicket } from '../components/KitchenTicket';

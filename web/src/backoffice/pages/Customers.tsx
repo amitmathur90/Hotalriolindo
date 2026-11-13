@@ -3,10 +3,11 @@ import { Plus } from 'lucide-react';
 import { boApi } from '../../lib/api';
 import { dateOnly, dt, money } from '../../lib/format';
 import { Badge, Empty, Field, Modal, PageHeader, SearchInput, Spinner, Tabs, useAsync, useToast } from '../../components/ui';
+import { ID_TYPES } from '../../components/EInvoice';
 import { ExportButtons } from '../widgets';
 
 const SEGMENTS = [{ id: '', label: 'All' }, { id: 'new', label: 'New (30d)' }, { id: 'regular', label: 'Regular' }, { id: 'vip', label: 'VIP' }, { id: 'inactive', label: 'Inactive (60d)' }, { id: 'birthday', label: 'Birthdays this month' }];
-const FIELDS = [['name', 'Name *'], ['phone', 'Phone'], ['email', 'Email'], ['tax_id', 'Cédula / Tax ID'], ['birthday', 'Birthday'], ['code', 'Loyalty card / code'], ['customer_group', 'Group'], ['tags', 'Tags'], ['address', 'Address'], ['notes', 'Notes']];
+const FIELDS = [['name', 'Name *'], ['phone', 'Phone'], ['email', 'Email'], ['id_type', 'Tipo de identificación'], ['tax_id', 'Cédula / Tax ID'], ['activity_code', 'Actividad económica'], ['birthday', 'Birthday'], ['code', 'Loyalty card / code'], ['customer_group', 'Group'], ['tags', 'Tags'], ['address', 'Address'], ['notes', 'Notes']];
 
 export default function Customers() {
   const [tab, setTab] = useState<'customers' | 'gift'>('customers');
@@ -65,7 +66,13 @@ function CustomerList() {
       <Modal open={!!edit} onClose={() => setEdit(null)} title={edit?.id ? 'Edit customer' : 'New customer'} footer={<><button className="btn-secondary" onClick={() => setEdit(null)}>Cancel</button><button className="btn-primary" onClick={save}>Save</button></>}>
         {edit && <div className="grid gap-3 sm:grid-cols-2">{FIELDS.map(([k, l]) => (
           <Field key={k} label={l} className={k === 'notes' || k === 'address' ? 'sm:col-span-2' : ''}>
-            <input className="input" type={k === 'birthday' ? 'date' : 'text'} value={k === 'birthday' ? edit[k]?.slice?.(0, 10) || '' : edit[k] || ''} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />
+            {k === 'id_type' ? (
+              <select className="input" value={edit.id_type || ''} onChange={(e) => setEdit({ ...edit, id_type: e.target.value })}>
+                <option value="">—</option>{ID_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            ) : (
+              <input className="input" type={k === 'birthday' ? 'date' : 'text'} value={k === 'birthday' ? edit[k]?.slice?.(0, 10) || '' : edit[k] || ''} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />
+            )}
           </Field>
         ))}</div>}
       </Modal>

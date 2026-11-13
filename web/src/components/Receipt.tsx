@@ -29,9 +29,21 @@ export function Barcode({ value, height = 36 }: { value: string; height?: number
 // Receipt wording. Spanish receipts (e.g. Costa Rica) are bilingual for international guests.
 const LABELS = {
   en: { invoice: 'TAX INVOICE', refund: 'REFUND RECEIPT', dup: '*** DUPLICATE ***', offline: '(Offline – pending sync)', receipt: 'Receipt', cashier: 'Cashier', order: 'Order', customer: 'Customer', taxId: 'Tax ID', reason: 'Reason', item: 'Item', qty: 'Qty', rate: 'Rate', amount: 'Amount', subtotal: 'Subtotal', discount: 'Discount', taxReversed: 'Tax reversed', service: 'Service charge', tip: 'Tip', total: 'TOTAL', refunded: 'REFUNDED', change: 'Change', earned: 'Points earned', redeemed: 'Points redeemed', balance: 'Points balance', tax: 'Tax', taxable: 'Taxable', phone: 'Ph', terms: 'Terms & conditions', dining: { dine_in: 'dine in', takeaway: 'takeaway', delivery: 'delivery', pickup: 'pickup' } as Record<string, string> },
-  es: { invoice: 'TIQUETE / RECEIPT', refund: 'DEVOLUCIÓN / REFUND', dup: '*** COPIA / DUPLICATE ***', offline: '(Sin conexión – pendiente de sincronizar)', receipt: 'Tiquete', cashier: 'Cajero(a)', order: 'Orden', customer: 'Cliente', taxId: 'Céd.', reason: 'Motivo', item: 'Artículo', qty: 'Cant.', rate: 'Precio', amount: 'Monto', subtotal: 'Subtotal', discount: 'Descuento', taxReversed: 'Impuesto devuelto', service: 'Servicio 10%', tip: 'Propina', total: 'TOTAL', refunded: 'DEVUELTO', change: 'Vuelto', earned: 'Puntos ganados', redeemed: 'Puntos canjeados', balance: 'Saldo de puntos', tax: 'Impuesto', taxable: 'Base imponible', phone: 'Tel', terms: 'Términos y condiciones', dining: { dine_in: 'comer aquí', takeaway: 'para llevar', delivery: 'express', pickup: 'recoger' } as Record<string, string> },
+  es: { invoice: 'TIQUETE / RECEIPT', refund: 'DEVOLUCIÓN / REFUND', dup: '*** COPIA / DUPLICATE ***', offline: '(Sin conexión – pendiente de sincronizar)', receipt: 'Recibo', cashier: 'Cajero(a)', order: 'Orden', customer: 'Cliente', taxId: 'Céd.', reason: 'Motivo', item: 'Artículo', qty: 'Cant.', rate: 'Precio', amount: 'Monto', subtotal: 'Subtotal', discount: 'Descuento', taxReversed: 'Impuesto devuelto', service: 'Servicio 10%', tip: 'Propina', total: 'TOTAL', refunded: 'DEVUELTO', change: 'Vuelto', earned: 'Puntos ganados', redeemed: 'Puntos canjeados', balance: 'Saldo de puntos', tax: 'Impuesto', taxable: 'Base imponible', phone: 'Tel', terms: 'Términos y condiciones', dining: { dine_in: 'comer aquí', takeaway: 'para llevar', delivery: 'express', pickup: 'recoger' } as Record<string, string> },
 };
 export const receiptLabels = (business: any) => (String(business?.locale || '').startsWith('es') ? LABELS.es : LABELS.en);
+
+// Costa Rica electronic documents (Hacienda v4.4)
+export const EDOC_NAMES: Record<string, string> = { '01': 'Factura electrónica', '03': 'Nota de crédito electrónica', '04': 'Tiquete electrónico' };
+export const ID_TYPE_LABELS: Record<string, string> = { '01': 'Cédula física', '02': 'Cédula jurídica', '03': 'DIMEX', '04': 'NITE', '05': 'Extranjero', '06': 'No contribuyente' };
+/** The electronic document a receipt represents: the sale's tiquete/factura, or the refund's nota de crédito. */
+export function receiptEDoc(sale: any) {
+  const docs: any[] = sale?.e_documents || [];
+  const wanted = sale?.type === 'refund' ? ['03'] : ['01', '04'];
+  return [...docs].reverse().find((d) => wanted.includes(d.doc_type) && !d.replaced_by) || null;
+}
+/** 00100001040000000123 → 001-00001-04-0000000123 */
+export const fmtConsecutivo = (c: string) => (c && c.length === 20 ? `${c.slice(0, 3)}-${c.slice(3, 8)}-${c.slice(8, 10)}-${c.slice(10)}` : c);
 
 export function Receipt({ sale, business, format = 'thermal' }: { sale: any; business: any; format?: 'thermal' | 'a4' }) {
   const sym = business?.currency_symbol || '₡';
@@ -43,6 +55,7 @@ export function Receipt({ sale, business, format = 'thermal' }: { sale: any; bus
   const taxLines = (sale.type === 'sale' ? sale.tax_summary || [] : []).flatMap((t: any) => gstSplit(t, sale.gst_mode || 'intra').map((x) => ({ ...x, taxable: t.taxable })));
   const refundTaxes = isRefund ? sale.items.flatMap((i: any) => i.taxes || []) : [];
   const a4 = format === 'a4';
+  const ed = receiptEDoc(sale);
   return (
     <div className={`print-area ${a4 ? 'a4 text-sm' : 'text-[12px] leading-snug'} mx-auto bg-white font-mono text-black ${a4 ? 'max-w-[720px] p-8' : 'max-w-[320px] p-3'}`}>
       <div className="text-center">
@@ -53,7 +66,15 @@ export function Receipt({ sale, business, format = 'thermal' }: { sale: any; bus
         {(sale.store_phone || business?.phone) && <div>{L.phone}: {sale.store_phone || business?.phone}</div>}
         {(sale.store_gstin || business?.gstin) && <div>{taxIdLabel}: {sale.store_gstin || business?.gstin}</div>}
         {sale.receipt_header && <div className="mt-1 italic">{sale.receipt_header}</div>}
-        <div className={`mt-2 font-bold ${a4 ? 'text-lg' : ''}`}>{isRefund ? L.refund : L.invoice}</div>
+        {ed ? (
+          <>
+            <div className={`mt-2 font-bold uppercase ${a4 ? 'text-lg' : ''}`}>{EDOC_NAMES[ed.doc_type]}</div>
+            <div className="font-bold">N° {fmtConsecutivo(ed.consecutivo)}</div>
+            {ed.environment === 'stag' && <div className="font-bold">*** PRUEBAS – SIN VALIDEZ FISCAL ***</div>}
+          </>
+        ) : (
+          <div className={`mt-2 font-bold ${a4 ? 'text-lg' : ''}`}>{isRefund ? L.refund : L.invoice}</div>
+        )}
         {sale._reprint && <div className="font-bold">{L.dup}</div>}
         {sale.offline && !sale.id && <div className="font-bold">{L.offline}</div>}
       </div>
@@ -62,7 +83,15 @@ export function Receipt({ sale, business, format = 'thermal' }: { sale: any; bus
       {sale.employee_name && <div>{L.cashier}: {sale.employee_name}</div>}
       {sale.dining_option && <div>{L.order}: {L.dining[sale.dining_option] || String(sale.dining_option).replace('_', ' ')}{sale.table_name ? ` · ${sale.table_name}` : ''}{sale.ticket_name && sale.ticket_name !== sale.table_name ? ` · ${sale.ticket_name}` : ''}</div>}
       {sale.customer_name && <div>{L.customer}: {sale.customer_name}{sale.customer_phone ? ` (${sale.customer_phone})` : ''}</div>}
-      {sale.customer_tax_id && <div>{L.taxId}: {sale.customer_tax_id}</div>}
+      {ed?.receptor?.nombre ? (
+        <div>
+          <div>Receptor: {ed.receptor.nombre}</div>
+          {ed.receptor.id_number && <div>{ID_TYPE_LABELS[ed.receptor.id_type] || L.taxId}: {ed.receptor.id_number}</div>}
+          {ed.receptor.email && <div>{ed.receptor.email}</div>}
+        </div>
+      ) : (
+        sale.customer_tax_id && <div>{L.taxId}: {sale.customer_tax_id}</div>
+      )}
       {sale.refund_reason && <div>{L.reason}: {sale.refund_reason}</div>}
       <div className="my-2 border-t border-dashed border-black" />
       <table className="w-full">
@@ -110,6 +139,16 @@ export function Receipt({ sale, business, format = 'thermal' }: { sale: any; bus
           <tbody>{taxLines.map((t: any, i: number) => <tr key={i}><td className="border border-black p-1">{t.name} @ {t.rate}%</td><td className="border border-black p-1 text-right">{m(t.taxable)}</td><td className="border border-black p-1 text-right">{m(t.amount)}</td></tr>)}</tbody>
         </table>
       )}
+      {ed && (
+        <div className="mt-2 border-t border-dashed border-black pt-1 text-[0.9em]">
+          {ed.reference?.clave && (
+            <div className="mb-1">Referencia: {EDOC_NAMES[ed.reference.doc_type] || ed.reference.doc_type} N° {fmtConsecutivo(ed.reference.clave.slice(21, 41))}{ed.reference.reason ? ` · ${ed.reference.reason}` : ''}</div>
+          )}
+          <div className="font-bold">Clave numérica:</div>
+          <div className="break-all tracking-tight">{ed.clave.slice(0, 25)}<br />{ed.clave.slice(25)}</div>
+          {sale.e_resolution && <div className="mt-1 text-center text-[0.9em]">{sale.e_resolution}</div>}
+        </div>
+      )}
       <div className="mt-3 text-center">
         <Barcode value={String(sale.receipt_no || '0')} />
         <div className="mt-2 whitespace-pre-line">{business?.receipt_footer}</div>
@@ -134,6 +173,10 @@ export function receiptText(sale: any, business: any, link?: string) {
     ...sale.items.map((i: any) => `${fq(i.qty)} × ${i.product_name}${i.variant_name ? ` (${i.variant_name})` : ''} — ${money(i.gross, sym)}`), '',
     Number(sale.discount_total) > 0 ? `${L.discount}: -${money(sale.discount_total, sym)}` : '',
     `${L.tax}: ${money(sale.tax_total, sym)}`, Number(sale.service_charge) > 0 ? `${L.service}: ${money(sale.service_charge, sym)}` : '', `*${L.total}: ${money(sale.total, sym)}*`,
+    ...(() => {
+      const ed = receiptEDoc(sale);
+      return ed ? ['', `${EDOC_NAMES[ed.doc_type]} N° ${fmtConsecutivo(ed.consecutivo)}`, `Clave: ${ed.clave}`] : [];
+    })(),
     link ? `\n${L.receipt}: ${link}` : '', business?.receipt_footer || '',
   ];
   return lines.filter((l) => l !== '').join('\n');

@@ -23,7 +23,7 @@ r.put('/business', requirePerm('settings.manage'), ah(async (req, res) => {
 
 // ---------------------------------------------------------------- Stores (limited by subscription)
 const storeCrud = crud({
-  table: 'stores', fields: ['name', 'address', 'phone', 'gstin', 'state', 'gst_mode', 'receipt_header', 'active'], required: ['name'],
+  table: 'stores', fields: ['name', 'address', 'phone', 'gstin', 'state', 'gst_mode', 'receipt_header', 'active', 'hacienda_branch'], required: ['name'],
   perm: 'settings.manage', orderBy: 'created_at',
 });
 r.post('/stores', requirePerm('settings.manage'), ah(async (req, _res, next) => {

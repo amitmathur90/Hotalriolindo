@@ -87,6 +87,15 @@ body {
   .print-area.a4 {
     width: 190mm;
   }
+  html[data-paper='58mm'] .print-area:not(.a4) {
+    width: 54mm;
+    font-size: 11px;
+  }
+  /* Print only the kitchen ticket (or only the receipt) when both are on screen */
+  html[data-print-only='kitchen'] .print-area:not(.kitchen-ticket),
+  html[data-print-only='receipt'] .print-area.kitchen-ticket {
+    display: none !important;
+  }
   @page {
     margin: 4mm;
   }

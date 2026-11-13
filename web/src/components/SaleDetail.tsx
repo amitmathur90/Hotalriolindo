@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
-import { Printer, FileText, Undo2, Copy } from 'lucide-react';
+import { Printer, FileText, Undo2, Copy, Landmark } from 'lucide-react';
 import type { Client } from '../lib/api';
 import { money, qty as fq, uuid } from '../lib/format';
-import { Receipt } from './Receipt';
+import { Receipt, receiptEDoc } from './Receipt';
+import { EDocList, ReceptorForm, receptorError, receptorFromCustomer, type ReceptorInput } from './EInvoice';
 import { ReceiptShare } from './ReceiptShare';
 import { Badge, Field, Modal, Toggle, useToast } from './ui';
 
@@ -21,6 +22,36 @@ export function SaleDetail({ sale, business, api, canRefund, requestApproval, on
   const [restock, setRestock] = useState(true);
   const [busy, setBusy] = useState(false);
   const receiptRef = useRef<HTMLDivElement>(null);
+  // Hacienda: factura electrónica on demand (replaces the sale's tiquete)
+  const [factura, setFactura] = useState<ReceptorInput | null>(null);
+  const edoc = receiptEDoc(sale);
+  const canFactura = sale.type === 'sale' && sale.status === 'completed' && edoc?.doc_type === '04';
+
+  async function issueFactura() {
+    if (!factura) return;
+    setBusy(true);
+    try {
+      await api(`/hacienda/sales/${sale.id}/factura`, { body: { receptor: factura, customer_id: sale.customer_id || undefined } });
+      toast('Factura electrónica emitida — el tiquete se anuló con nota de crédito');
+      setFactura(null);
+      onChanged(await api(`/sales/${sale.id}`));
+    } catch (e: any) {
+      toast(e.message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function downloadXml(d: any, kind: 'signed' | 'response') {
+    try {
+      const xml = await api<string>(`/hacienda/documents/${d.id}/xml${kind === 'response' ? '?kind=response' : ''}`, { text: true });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+      a.download = `${d.clave}${kind === 'response' ? '_respuesta' : ''}.xml`;
+      a.click();
+    } catch (e: any) {
+      toast(e.message, 'err');
+    }
+  }
   const link = `${location.origin}/r/${sale.id}/${sale.share_sig}`;
   const refundable = sale.type === 'sale' && sale.status !== 'refunded';
 
@@ -62,8 +93,24 @@ export function SaleDetail({ sale, business, api, canRefund, requestApproval, on
           <Receipt sale={sale} business={business} format={format} />
         </div>
         <div className="flex-1 space-y-3">
-          {!refund ? (
+          {factura ? (
+            <div className="space-y-3">
+              <div className="font-semibold">Factura electrónica</div>
+              <p className="text-sm text-slate-500">Datos del cliente. El tiquete de esta venta se anulará con una nota de crédito y se emitirá la factura en su lugar.</p>
+              <ReceptorForm value={factura} onChange={setFactura} />
+              {receptorError(factura) && <p className="text-xs text-rose-600">{receptorError(factura)}</p>}
+              <div className="flex gap-2">
+                <button className="btn-secondary flex-1" onClick={() => setFactura(null)}>Cancelar</button>
+                <button className="btn-primary flex-1" disabled={busy || !!receptorError(factura)} onClick={issueFactura}>Emitir factura</button>
+              </div>
+            </div>
+          ) : !refund ? (
             <>
+              {canFactura && (
+                <button className="btn-secondary w-full" onClick={() => setFactura(receptorFromCustomer({ name: sale.customer_name, tax_id: sale.customer_tax_id, email: sale.customer_email, id_type: sale.customer_id_type }))}>
+                  <Landmark size={16} />Factura electrónica (datos del cliente)
+                </button>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <button className="btn-secondary" onClick={() => print('thermal', true)}><Printer size={16} />Reprint</button>
                 <button className="btn-secondary" onClick={() => print('a4')}><FileText size={16} />A4 invoice</button>
@@ -72,6 +119,7 @@ export function SaleDetail({ sale, business, api, canRefund, requestApproval, on
               <div className="grid grid-cols-2 gap-2">
                 <button className="btn-secondary col-span-2" onClick={() => { navigator.clipboard?.writeText(link); toast('Digital receipt link copied'); }}><Copy size={16} />Copy digital receipt link</button>
               </div>
+              <EDocList docs={sale.e_documents || []} onDownload={downloadXml} />
               {sale.refunds?.length > 0 && (
                 <div className="rounded-lg bg-rose-50 p-3 text-sm dark:bg-rose-950/30">
                   <div className="font-medium">Refunds</div>

@@ -17,13 +17,27 @@ import inventoryRoutes from './routes/inventory.ts';
 import peopleRoutes, { expirePoints } from './routes/people.ts';
 import reportRoutes from './routes/reports.ts';
 import settingsRoutes, { admin } from './routes/settings.ts';
+import haciendaRoutes from './routes/hacienda.ts';
+import { startHaciendaWorker } from './hacienda/service.ts';
 import { db } from './db.ts';
+import { APP_NAME, MULTI_TENANT } from './config.ts';
 
 const PORT = Number(process.env.PORT || 4000);
 const app = express();
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json({ limit: '6mb' }));
+
+// Public app config: lets the login page show first-run setup, sign-up (SaaS mode only) and the demo hint.
+app.get('/api/public/config', async (_req, res, next) => {
+  try {
+    const b = await db.one(`SELECT name FROM businesses ORDER BY created_at LIMIT 1`);
+    const demo = !!(await db.one(`SELECT 1 FROM users WHERE lower(email)='owner@demo.com' AND active`));
+    res.json({ app_name: APP_NAME, multi_tenant: MULTI_TENANT, setup_needed: !b, business_name: b?.name ?? null, demo });
+  } catch (e) {
+    next(e);
+  }
+});
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -42,9 +56,10 @@ app.get('/api/public/receipt/:id/:sig', async (req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
-app.use('/api/admin', authenticate, admin);
+if (MULTI_TENANT) app.use('/api/admin', authenticate, admin);
 app.use('/api/reports', authenticate, reportRoutes);
 app.use('/api/settings', authenticate, settingsRoutes);
+app.use('/api/hacienda', authenticate, haciendaRoutes);
 app.use('/api', authenticate, catalogRoutes, salesRoutes, inventoryRoutes, peopleRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -66,9 +81,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 const kind = await initDb();
 console.log(`[db] ${kind}`);
 if (process.env.SEED_DEMO !== 'false' && (await seedDemo())) console.log('[seed] demo business created (owner@demo.com / demo123)');
+if (!MULTI_TENANT) {
+  // Single-hotel mode has no platform admin: lock any account left over from SaaS mode (e.g. admin@itspos.local).
+  const off = await db.query(`UPDATE users SET active=false WHERE is_super_admin AND active RETURNING email`);
+  if (off.length) console.log(`[mode] single hotel — disabled platform admin: ${off.map((u) => u.email).join(', ')}`);
+}
 const server = http.createServer(app);
 initRealtime(server);
-server.listen(PORT, () => console.log(`[api] ITS POS listening on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`[api] ${APP_NAME} listening on http://localhost:${PORT}`));
+
+// Hacienda e-invoicing queue: signs, sends and checks electronic documents in the background
+startHaciendaWorker();
 
 // Daily housekeeping: loyalty point expiry
 setInterval(() => expirePoints().catch(console.error), 24 * 3600 * 1000);

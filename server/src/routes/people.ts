@@ -26,7 +26,7 @@ r.get('/customers', ah(async (req, res) => {
   res.json(await db.query(`SELECT * FROM customers WHERE business_id=$1 ${where} ORDER BY name LIMIT ${req.query.q ? 50 : 2000}`, params));
 }));
 
-const CUST_FIELDS = ['name', 'phone', 'email', 'address', 'birthday', 'code', 'notes', 'tags', 'customer_group', 'tax_id'];
+const CUST_FIELDS = ['name', 'phone', 'email', 'address', 'birthday', 'code', 'notes', 'tags', 'customer_group', 'tax_id', 'id_type', 'activity_code'];
 r.post('/customers', requireUser, ah(async (req, res) => {
   if (!req.auth.permissions.has('customers.manage') && !req.auth.permissions.has('pos.sell')) throw new HttpError(403, 'Not allowed');
   const b = req.body || {};

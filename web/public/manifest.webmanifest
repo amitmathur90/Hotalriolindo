@@ -1,6 +1,6 @@
 {
-  "name": "ITS POS",
-  "short_name": "ITS POS",
+  "name": "Hotel Rio Lindo POS",
+  "short_name": "Rio Lindo POS",
   "start_url": "/pos",
   "display": "standalone",
   "background_color": "#0f172a",

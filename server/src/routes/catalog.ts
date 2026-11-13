@@ -7,7 +7,7 @@ import { ah, audit, bad, notFound, num } from '../util.ts';
 const r = Router();
 
 r.use('/categories', crud({
-  table: 'categories', fields: ['name', 'color', 'kitchen_station', 'sort'], required: ['name'],
+  table: 'categories', fields: ['name', 'color', 'kitchen_station', 'sort', 'cabys'], required: ['name'],
   perm: 'products.manage', orderBy: 'sort, name',
 }));
 r.use('/taxes', crud({
@@ -65,19 +65,21 @@ async function saveProduct(q: Q, req: any, id: string | null) {
     }
   }
   const vals = [b.name, b.category_id || null, b.description || null, b.type || 'standard', b.unit || 'pcs', b.track_stock !== false,
-    json(b.tax_ids || []), b.image_url || null, b.color || null, !!b.is_favorite, json(b.available_store_ids || []), b.active !== false];
+    json(b.tax_ids || []), b.image_url || null, b.color || null, !!b.is_favorite, json(b.available_store_ids || []), b.active !== false,
+    b.cabys ? String(b.cabys).replace(/\D/g, '') || null : null];
+  if (vals[12] && String(vals[12]).length !== 13) throw bad('El código CABYS debe tener 13 dígitos');
   let productId = id;
   if (id) {
     const row = await q.one(
       `UPDATE products SET name=$3, category_id=$4, description=$5, type=$6, unit=$7, track_stock=$8, tax_ids=$9, image_url=$10, color=$11,
-         is_favorite=$12, available_store_ids=$13, active=$14 WHERE id=$1 AND business_id=$2 RETURNING id`,
+         is_favorite=$12, available_store_ids=$13, active=$14, cabys=$15 WHERE id=$1 AND business_id=$2 RETURNING id`,
       [id, req.auth.businessId, ...vals],
     );
     if (!row) throw notFound('Product');
   } else {
     const row = await q.one(
-      `INSERT INTO products (business_id, name, category_id, description, type, unit, track_stock, tax_ids, image_url, color, is_favorite, available_store_ids, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      `INSERT INTO products (business_id, name, category_id, description, type, unit, track_stock, tax_ids, image_url, color, is_favorite, available_store_ids, active, cabys)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
       [req.auth.businessId, ...vals],
     );
     productId = row!.id;

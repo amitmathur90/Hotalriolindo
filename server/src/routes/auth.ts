@@ -4,6 +4,7 @@ import { db, tx } from '../db.ts';
 import { authenticate, hashPin, loadUserCtx, requirePerm, requireUser, sign, verifyToken } from '../auth.ts';
 import { HttpError, ah, audit, bad } from '../util.ts';
 import { createBusiness } from '../seed.ts';
+import { MULTI_TENANT } from '../config.ts';
 import { PERMISSIONS } from '../../../shared/pricing.ts';
 
 const r = Router();
@@ -33,7 +34,13 @@ const loginLog = (business_id: any, user_id: any, method: string, ip: any, succe
 
 // Sign up: creates a business tenant with default store, roles, taxes and payment methods.
 r.post('/register', ah(async (req, res) => {
-  const { businessName, ownerName, email, password, phone, country } = req.body || {};
+  const { businessName, ownerName, email, password, phone } = req.body || {};
+  let { country } = req.body || {};
+  // Single-hotel mode: sign-up is only the one-time first-run setup, always Costa Rica.
+  if (!MULTI_TENANT) {
+    if (await db.one(`SELECT 1 FROM businesses LIMIT 1`)) throw new HttpError(403, 'Registration is closed');
+    country = 'CR';
+  }
   if (!businessName || !ownerName || !email || !password) throw bad('All fields are required');
   if (String(password).length < 6) throw bad('Password must be at least 6 characters');
   if (await db.one(`SELECT 1 FROM users WHERE lower(email)=lower($1)`, [email])) throw bad('Email already registered');

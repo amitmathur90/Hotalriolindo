@@ -1,8 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Maximize, Undo2, Flame, Check, Settings, Volume2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Maximize, Undo2, Flame, Check, Settings, Volume2, Printer } from 'lucide-react';
 import { makeClient } from '../lib/api';
 import { connectSocket, beep } from '../lib/misc';
-import { Field, useToast } from '../components/ui';
+import { Field, Modal, useToast } from '../components/ui';
+import { KitchenTicket, printNow, type KitchenTicketData } from '../components/KitchenTicket';
+import { PrinterSetup, applyAutoprintParam } from '../components/PrinterSetup';
+
+applyAutoprintParam('kds'); // launcher opens /kds?autoprint=1
+
+// Automatic kitchen printing: each new order is printed once on this display's printer.
+const PRINTED_KEY = 'its.kds.printed';
+const autoPrintOn = () => localStorage.getItem('its.kds.autoprint') === '1';
+const printedIds = (): string[] => JSON.parse(localStorage.getItem(PRINTED_KEY) || '[]');
+const markPrinted = (id: string) => localStorage.setItem(PRINTED_KEY, JSON.stringify([...printedIds().filter((x) => x !== id), id].slice(-500)));
+const ticketData = (o: any): KitchenTicketData => ({
+  station: o.station, label: o.table_name && o.table_name !== o.order_label ? `${o.order_label} · ${o.table_name}` : o.order_label,
+  dining: o.dining_option, time: o.created_at, priority: o.priority, items: o.items || [],
+});
 
 const KEY = 'its.kds.device';
 const DELAY_MIN = 15;
@@ -22,7 +36,39 @@ function KdsBoard({ dev, onReset }: { dev: any; onReset: () => void }) {
   const [now, setNow] = useState(Date.now());
   const [showDone, setShowDone] = useState(false);
   const [online, setOnline] = useState(true);
-  const load = () => api('/kitchen/orders').then((o) => { setOrders(o); setOnline(true); }).catch(() => setOnline(false));
+  const [settings, setSettings] = useState(false);
+  const [printing, setPrinting] = useState<KitchenTicketData | null>(null);
+  const queue = useRef<KitchenTicketData[]>([]);
+  const busy = useRef(false);
+  const stationRef = useRef(station);
+  stationRef.current = station;
+
+  // Print queue: one ticket at a time
+  const pump = () => {
+    if (busy.current || !queue.current.length) return;
+    busy.current = true;
+    setPrinting(queue.current.shift()!);
+    setTimeout(() => {
+      printNow('kitchen');
+      setPrinting(null);
+      setTimeout(() => { busy.current = false; pump(); }, 400);
+    }, 120);
+  };
+  const enqueuePrint = (o: any) => {
+    if (!autoPrintOn() || o.status !== 'new' || printedIds().includes(o.id)) return;
+    if (stationRef.current && o.station !== stationRef.current) return;
+    // Orders older than when auto-print was turned on are not printed retroactively
+    const since = Number(localStorage.getItem('its.kds.autoprint_since') || 0);
+    if (+new Date(o.created_at) < since) return;
+    markPrinted(o.id);
+    queue.current.push(ticketData(o));
+    pump();
+  };
+  const load = () => api('/kitchen/orders').then((o: any[]) => {
+    setOrders(o);
+    setOnline(true);
+    o.forEach(enqueuePrint); // catches orders that arrived while the connection was down
+  }).catch(() => setOnline(false));
 
   useEffect(() => {
     load();
@@ -32,6 +78,7 @@ function KdsBoard({ dev, onReset }: { dev: any; onReset: () => void }) {
     s.on('kitchen:new', (o) => {
       setOrders((x) => [...x.filter((y) => y.id !== o.id), o]);
       if (!station || o.station === station) { beep(880); setTimeout(() => beep(1100), 180); }
+      enqueuePrint(o);
     });
     s.on('kitchen:update', (o) => setOrders((x) => x.map((y) => (y.id === o.id ? o : y))));
     s.on('kitchen:refresh', load);
@@ -64,7 +111,8 @@ function KdsBoard({ dev, onReset }: { dev: any; onReset: () => void }) {
           <button className={`rounded-lg px-3 py-1.5 ${showDone ? 'bg-slate-600' : 'bg-slate-800'}`} onClick={() => setShowDone(!showDone)}><Undo2 size={16} className="mr-1 inline" />Recall</button>
           <button className="rounded-lg bg-slate-800 p-2" onClick={() => beep()} aria-label="Test sound"><Volume2 size={16} /></button>
           <button className="rounded-lg bg-slate-800 p-2" onClick={() => document.documentElement.requestFullscreen?.()} aria-label="Full screen"><Maximize size={16} /></button>
-          <button className="rounded-lg bg-slate-800 p-2" onClick={() => confirm('Unregister this kitchen display?') && onReset()} aria-label="Settings"><Settings size={16} /></button>
+          <button className={`rounded-lg p-2 ${autoPrintOn() ? 'bg-emerald-700' : 'bg-slate-800'}`} onClick={() => setSettings(true)} aria-label="Printer"><Printer size={16} /></button>
+          <button className="rounded-lg bg-slate-800 p-2" onClick={() => setSettings(true)} aria-label="Settings"><Settings size={16} /></button>
         </div>
       </header>
       <div className="flex-1 overflow-x-auto p-3">
@@ -104,12 +152,24 @@ function KdsBoard({ dev, onReset }: { dev: any; onReset: () => void }) {
                     {o.status === 'ready' && <button className="rounded-lg bg-slate-600 py-3 text-lg font-bold" onClick={() => update(o, { status: 'served' })}>Served</button>}
                     {o.status === 'served' && <button className="rounded-lg bg-slate-700 py-3 text-lg font-bold" onClick={() => update(o, { status: 'ready' })}>Recall</button>}
                   </div>
+                  <button className="mx-3 mb-2 flex items-center justify-center gap-1 rounded-lg py-1 text-xs text-slate-400 hover:bg-white/5" onClick={() => { queue.current.push(ticketData(o)); pump(); }}><Printer size={12} />Reimprimir</button>
                 </div>
               );
             })}
           </div>
         )}
       </div>
+      {printing && <div className="hidden print:block"><KitchenTicket data={printing} /></div>}
+      {settings && (
+        <Modal open onClose={() => setSettings(false)} title="Impresora de cocina" size="lg">
+          <div className="text-slate-900 dark:text-slate-100">
+            <PrinterSetup kind="kds" onTestPrint={() => { queue.current.push({ station: station || 'Cocina', label: 'PRUEBA DE IMPRESIÓN', items: [{ qty: 1, name: 'Impresora conectada correctamente' }] }); pump(); }} />
+            <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-700">
+              <button className="btn-danger" onClick={() => confirm('¿Desvincular esta pantalla de cocina?') && onReset()}>Desvincular pantalla</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

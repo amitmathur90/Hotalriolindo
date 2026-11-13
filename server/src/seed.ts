@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { db, json, tx, type Q } from './db.ts';
 import { hashPin } from './auth.ts';
 import { COUNTRY_PRESETS, type CountryCode } from '../../shared/pricing.ts';
+import { MULTI_TENANT } from './config.ts';
 
 export const DEFAULT_ROLES: Record<string, string[]> = {
   Owner: ['*'],
@@ -67,11 +68,15 @@ export async function createBusiness(q: Q, nb: NewBusiness) {
 export async function seedDemo() {
   const exists = await db.one(`SELECT id FROM users WHERE lower(email)='owner@demo.com'`);
   if (exists) return false;
+  // Single-hotel mode: never add the demo next to a real hotel set up via first-run setup.
+  if (!MULTI_TENANT && (await db.one(`SELECT 1 FROM businesses LIMIT 1`))) return false;
   await tx(async (q) => {
-    await q.query(
-      `INSERT INTO users (business_id, name, email, password_hash, is_super_admin) VALUES (NULL,'Platform Admin','admin@itspos.local',$1,true)`,
-      [await bcrypt.hash('admin123', 10)],
-    );
+    if (MULTI_TENANT) {
+      await q.query(
+        `INSERT INTO users (business_id, name, email, password_hash, is_super_admin) VALUES (NULL,'Platform Admin','admin@itspos.local',$1,true)`,
+        [await bcrypt.hash('admin123', 10)],
+      );
+    }
     const { business: b, store, roles } = await createBusiness(q, {
       businessName: 'Hotel Rio Lindo', ownerName: 'Gerencia Rio Lindo', email: 'owner@demo.com', password: 'demo123', pin: '1111',
       storeName: 'Restaurante Rio Lindo', country: 'CR',

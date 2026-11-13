@@ -19,7 +19,7 @@ export default function Items() {
         <CrudPage header={false} title="Categories" path="/categories" perm="products.manage" defaults={{ color: '#0d9488', sort: 0 }}
           subtitle="Kitchen station routes the category's items to that Kitchen Display / printer (e.g. Kitchen, Bar)."
           columns={[{ key: 'name', label: 'Name', render: (r) => <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: r.color }} />{r.name}</span> }, { key: 'kitchen_station', label: 'Kitchen station' }, { key: 'sort', label: 'Sort' }]}
-          fields={[{ key: 'name', label: 'Name', required: true }, { key: 'color', label: 'Color', type: 'color' }, { key: 'kitchen_station', label: 'Kitchen station', hint: 'Leave empty if not prepared' }, { key: 'sort', label: 'Sort order', type: 'number' }]} />
+          fields={[{ key: 'name', label: 'Name', required: true }, { key: 'color', label: 'Color', type: 'color' }, { key: 'kitchen_station', label: 'Kitchen station', hint: 'Leave empty if not prepared' }, { key: 'cabys', label: 'CABYS (Hacienda)', hint: '13 dígitos, para todos los productos de la categoría' }, { key: 'sort', label: 'Sort order', type: 'number' }]} />
       )}
       {tab === 'modifiers' && <Modifiers />}
     </div>
@@ -167,6 +167,7 @@ function ProductEditor({ product, meta, onClose, onSaved }: { product: any; meta
           </Field>
           <Field label="Unit"><select className="input" value={p.unit} onChange={(e) => set('unit', e.target.value)}>{['pcs', 'kg', 'g', 'l', 'ml', 'm', 'box', 'pack'].map((u) => <option key={u}>{u}</option>)}</select></Field>
           <Field label="Description"><input className="input" value={p.description || ''} onChange={(e) => set('description', e.target.value)} /></Field>
+          <Field label="CABYS (Hacienda)" hint="13 dígitos. Vacío = usa el de la categoría o el predeterminado"><input className="input" inputMode="numeric" maxLength={13} value={p.cabys || ''} onChange={(e) => set('cabys', e.target.value.replace(/\D/g, ''))} /></Field>
           <div className="flex flex-wrap gap-4 sm:col-span-2">
             <Toggle checked={p.track_stock} onChange={(v) => set('track_stock', v)} label="Track stock" />
             <Toggle checked={p.is_favorite} onChange={(v) => set('is_favorite', v)} label="Favorite on POS" />
