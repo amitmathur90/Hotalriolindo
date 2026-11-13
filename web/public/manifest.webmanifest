@@ -1,0 +1,9 @@
+{
+  "name": "ITS POS",
+  "short_name": "ITS POS",
+  "start_url": "/pos",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0d9488",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
