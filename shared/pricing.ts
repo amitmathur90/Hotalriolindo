@@ -213,4 +213,27 @@ export const PERMISSIONS: Record<string, string> = {
   'kitchen.view': 'Use Kitchen Display',
   'audit.view': 'View audit log',
   'timeclock.manage': 'Edit attendance records',
+  // Payroll Management System
+  'payroll.access': 'Open Payroll Management (read-only payroll & reports)',
+  'payroll.employees': 'Manage payroll employee records & documents',
+  'payroll.salary': 'Change salaries, rates & payroll rules',
+  'payroll.attendance': 'Enter & submit attendance / working hours',
+  'payroll.process': 'Prepare & calculate payroll, adjustments',
+  'payroll.approve': 'Approve, reject & reopen payroll',
+  'payroll.payments': 'Record payroll payments',
+  'payroll.advances': 'Manage advances (vales) & accounts (cuentas)',
+  'payroll.reports': 'Payroll reports, revenue & reconciliation',
+  'payroll.settings': 'Payroll settings, departments & holidays',
+  'payroll.self': 'View own payslips (employee self-service)',
+};
+
+/** Payroll roles added to every business (PRD §3). Owners have every permission. */
+export const PAYROLL_ROLES: Record<string, string[]> = {
+  'Payroll Admin': ['backoffice.access', 'payroll.access', 'payroll.employees', 'payroll.salary', 'payroll.attendance', 'payroll.process',
+    'payroll.payments', 'payroll.advances', 'payroll.reports', 'payroll.settings'],
+  'HR Manager': ['backoffice.access', 'payroll.access', 'payroll.employees', 'payroll.salary', 'payroll.attendance'],
+  'Payroll Accountant': ['backoffice.access', 'payroll.access', 'payroll.payments', 'payroll.reports', 'audit.view'],
+  'Department Manager': ['backoffice.access', 'payroll.attendance'],
+  'Auditor': ['backoffice.access', 'payroll.access', 'payroll.reports', 'audit.view', 'reports.view'],
+  'Employee': ['backoffice.access', 'payroll.self'],
 };

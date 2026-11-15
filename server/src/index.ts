@@ -19,6 +19,7 @@ import reportRoutes from './routes/reports.ts';
 import settingsRoutes, { admin } from './routes/settings.ts';
 import haciendaRoutes from './routes/hacienda.ts';
 import { startHaciendaWorker } from './hacienda/service.ts';
+import payrollRoutes, { startPayrollWorker } from './payroll/index.ts';
 import { db } from './db.ts';
 import { APP_NAME, MULTI_TENANT } from './config.ts';
 
@@ -60,6 +61,7 @@ if (MULTI_TENANT) app.use('/api/admin', authenticate, admin);
 app.use('/api/reports', authenticate, reportRoutes);
 app.use('/api/settings', authenticate, settingsRoutes);
 app.use('/api/hacienda', authenticate, haciendaRoutes);
+app.use('/api/payroll', authenticate, payrollRoutes);
 app.use('/api', authenticate, catalogRoutes, salesRoutes, inventoryRoutes, peopleRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -92,6 +94,8 @@ server.listen(PORT, () => console.log(`[api] ${APP_NAME} listening on http://loc
 
 // Hacienda e-invoicing queue: signs, sends and checks electronic documents in the background
 startHaciendaWorker();
+// Payroll: payslip e-mail queue
+startPayrollWorker();
 
 // Daily housekeeping: loyalty point expiry
 setInterval(() => expirePoints().catch(console.error), 24 * 3600 * 1000);

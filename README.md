@@ -78,6 +78,27 @@ Back Office → **Hacienda**.
 
 **Setup:** enter the emisor details (razón social, cédula, actividad económica, provincia/cantón/distrito, e-mail), the ATV API user and password, and upload the `.p12` key with its PIN. Use *Probar conexión y firma*, then activate in **Pruebas** (sandbox) first. Switch to **Producción** only after documents are accepted in sandbox. Each product needs a 13-digit **CABYS** code, set on the product, its category, or as the default. The secrets are stored encrypted with a key derived from `JWT_SECRET`.
 
+## Payroll Management System
+
+Back Office → **Payroll** (`/backoffice/payroll`), built from `Payroll Management System – Detailed PRD.pdf` and the `26 RL PAYROLL.xlsx` workbook. It has its own sidebar: dashboard, employees, departments & positions, attendance, payroll periods (calculation, approval, payments, payslips, comparison), advances & deductions, overtime/holidays/vacation, CAJA, aguinaldo, payments, payslips & email, reports, Cashbook vs QuickBooks reconciliation, settings & audit log, and *My payslips* for employees.
+
+**Calculation engine:** `shared/payroll.ts` (used by the server and by the browser's *Simulate* sandbox). It supports both salary structures: hourly (hours × rate) and monthly (quincenal = monthly ÷ 2, gross = quincenal × hours ÷ 96). Overtime, holiday, vacation, bonus, CAJA (a % of earnings or fixed insurance salary), accounts (*cuentas*) %, vales and adjustments are all handled. Every rate lives in effective-dated **rule versions** (Payroll → Settings). The defaults come from the newest workbook sheet: 96 h, CAJA 10.83 %, Seguro Fijo 10.67 %, overtime × 1.5, accounts 60 %. They are **observed spreadsheet values, not confirmed legal rules**, and need the owner's confirmation before production.
+
+```bash
+npx tsx server/scripts/payroll-selftest.ts     # engine vs 11 employees of the workbook (sheets 1, 4, 8, 11)
+# with a server on a fresh database (PORT=4100 PGLITE_DIR=./data/test-payroll npm start -w server):
+node server/scripts/payroll-e2e.mjs http://localhost:4100   # 67 checks of the PRD acceptance criteria
+```
+
+Key rules enforced:
+
+* **Salaries are effective-dated.** Each payroll stores a snapshot of salary, department, bank and rules, so a new salary never changes payroll already processed.
+* **Statuses:** Draft → Attendance pending → Calculation pending → Under review → Approved → Partially paid → Paid → Closed. Approved payroll is locked. Reopening needs `payroll.approve` and a reason, and is refused while payments exist.
+* **Pre-approval validation** blocks on errors (missing rate, negative net, duplicate cédula, advance recovery above the balance, unapproved advance). It also warns about: no hours, high deductions, missing bank details, unapproved overtime, salary changes, and more than 30 % variation vs the previous payroll.
+* **Manual changes** to calculated amounts need a reason and keep the original value. Recoveries of advances (vales) never exceed the outstanding balance and are posted to the advance ledger on approval. Payments support partial payments, USD at the historical rate and bulk batches.
+* **Roles** created for every business: Payroll Admin, HR Manager, Payroll Accountant, Department Manager (attendance for the departments they manage, no salary amounts), Auditor, Employee (own payslips). Only the owner, or a role with `payroll.approve`, can approve.
+* **Payslip PDFs** are generated on the server (jsPDF) in Spanish/English. E-mail uses the SMTP settings above, with a queue, three retries and a delivery log.
+
 ## Project layout
 
 ```

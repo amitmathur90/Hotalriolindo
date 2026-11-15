@@ -1,9 +1,10 @@
 import { createContext, lazy, Suspense, useContext, useEffect, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, Receipt, Package, Boxes, Truck, Users, UserCog, Wallet, Settings, ShieldCheck, Building2,
-  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X, Landmark,
+  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X, Landmark, BadgeDollarSign, ArrowLeft,
 } from 'lucide-react';
+import { PAYROLL_NAV } from '../payroll/nav';
 import { bo, boApi } from '../lib/api';
 import { setCurrency, dt } from '../lib/format';
 import { connectSocket, toggleTheme } from '../lib/misc';
@@ -22,6 +23,7 @@ const SettingsPage = lazy(() => import('./pages/Settings'));
 const Audit = lazy(() => import('./pages/Audit'));
 const Hacienda = lazy(() => import('./pages/Hacienda'));
 const Admin = lazy(() => import('./pages/Admin'));
+const Payroll = lazy(() => import('../payroll/Payroll'));
 
 export interface Session {
   user: any;
@@ -53,6 +55,7 @@ const NAV = [
 
 export default function BackOffice() {
   const nav = useNavigate();
+  const loc = useLocation();
   const toast = useToast();
   const [s, setS] = useState<any>(null);
   const [storeId, setStoreId] = useState<string | null>(bo.store);
@@ -92,11 +95,16 @@ export default function BackOffice() {
     can: (p) => perms.has(p), reload,
   };
   const unread = notifs.filter((n) => !n.read).length;
-  const items = s.user.is_super_admin && !s.business ? [] : NAV.filter((n) => perms.has(n.perm));
+  const payrollItems = s.business ? PAYROLL_NAV.filter((n) => n.perms.some((p) => perms.has(p))) : [];
+  const inPayroll = loc.pathname.startsWith('/backoffice/payroll');
+  const items = s.user.is_super_admin && !s.business ? [] : [
+    ...NAV.filter((n) => perms.has(n.perm)),
+    ...(payrollItems.length ? [{ to: payrollItems[0].to, label: 'Payroll', icon: BadgeDollarSign, perm: '' }] : []),
+  ];
   const home = s.user.is_super_admin && !s.business ? 'admin' : items[0]?.to ?? 'settings';
 
   const sidebar = (
-    <nav className="flex h-full flex-col gap-1 p-3">
+    <nav className="flex h-full flex-col gap-1 overflow-y-auto p-3">
       <div className="mb-4 flex items-center gap-2 px-2 pt-1">
         <img src="/icon.svg" className="h-8 w-8" alt="" />
         <div className="min-w-0">
@@ -104,8 +112,14 @@ export default function BackOffice() {
           <div className="truncate text-xs text-slate-500">{s.business?.name || 'Platform'}</div>
         </div>
       </div>
-      {items.map((n) => (
-        <NavLink key={n.to} to={n.to} end={n.to === ''} onClick={() => setMenu(false)}
+      {inPayroll && (
+        <>
+          <NavLink to="" end onClick={() => setMenu(false)} className="mb-1 flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><ArrowLeft size={14} />Back Office</NavLink>
+          <div className="px-3 pb-1 text-[11px] font-semibold tracking-wide text-slate-400 uppercase">Payroll Management</div>
+        </>
+      )}
+      {(inPayroll ? payrollItems : items).map((n) => (
+        <NavLink key={n.to} to={n.to} end={n.to === '' || n.to === 'payroll'} onClick={() => setMenu(false)}
           className={({ isActive }) => `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-brand-50 text-brand-700 dark:bg-brand-900/30 dark:text-brand-300' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'}`}>
           <n.icon size={18} />{n.label}
         </NavLink>
@@ -180,6 +194,7 @@ export default function BackOffice() {
                 <Route path="audit" element={<Audit />} />
                 <Route path="hacienda" element={<Hacienda />} />
                 <Route path="admin" element={<Admin />} />
+                <Route path="payroll/*" element={<Payroll />} />
                 <Route path="*" element={<Navigate to={home} replace />} />
               </Routes>
             </Suspense>

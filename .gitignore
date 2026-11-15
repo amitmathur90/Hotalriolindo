@@ -5,3 +5,8 @@ server/data/
 *.log
 .demo-sales.json
 *.tsbuildinfo
+
+# Business documents with staff data - never commit
+*.xlsx
+*.xls
+*PRD*.pdf
