@@ -5,6 +5,7 @@ import { DOC_NAMES, ID_TYPES, clave, consecutivo, crDateTime, digits, idNumber, 
 import { buildXml, type BuildInput, type Receptor } from './xml.ts';
 import { loadP12, signXml, type SigningCert } from './sign.ts';
 import { decrypt, decryptBuf } from './secrets.ts';
+import { documentPdf } from './pdf.ts';
 import { clearToken, getStatus, getToken, sendDocument, type HaciendaEnv } from './client.ts';
 
 /**
@@ -35,8 +36,17 @@ export function cleanReceptor(r: any, requireId = true): Receptor {
 }
 
 type IssueOpts = {
-  businessId: string; storeId: string; saleId: string; docType: DocType; issuedAt: Date; offline?: boolean;
+  businessId: string; storeId: string; saleId?: string | null; docType: DocType; issuedAt: Date; offline?: boolean;
   receptor?: Receptor | null; reference?: any; userId?: string | null;
+  /** Documents without a POS sale (manual invoice, Cloudbeds check-out) carry their own lines. */
+  source?: 'pos' | 'manual' | 'cloudbeds'; payload?: DocPayload | null; currency?: 'CRC' | 'USD'; exchangeRate?: number; externalRef?: string | null; notes?: string | null;
+};
+
+/** Lines of a document that is not a POS sale. Prices exclude IVA and are in the document currency. */
+export type DocPayload = {
+  lines: { qty: number; name: string; cabys: string; unit?: string; code?: string | null; price: number; discount?: number; tax_rate: number }[];
+  payments?: { type: string; name?: string; amount: number }[];
+  condition?: string; credit_days?: number | null; service_charge?: number; service_pct?: number; tip?: number;
 };
 
 /** Reserves the next consecutivo + clave for a document. Returns null when e-invoicing is not enabled. */
@@ -51,7 +61,7 @@ export async function issueDocument(q: Q, o: IssueOpts) {
     branch = String(n!.n).padStart(3, '0');
     await q.query(`UPDATE stores SET hacienda_branch=$2 WHERE id=$1`, [store!.id, branch]);
   }
-  const terminal = '00001';
+  const terminal = String(s.terminal || '00001').replace(/\D/g, '').padStart(5, '0').slice(-5);
   const seq = await q.one(
     `INSERT INTO hacienda_sequences (business_id, environment, branch, terminal, doc_type, last) VALUES ($1,$2,$3,$4,$5,1)
      ON CONFLICT (business_id, environment, branch, terminal, doc_type) DO UPDATE SET last = hacienda_sequences.last + 1 RETURNING last`,
@@ -61,9 +71,11 @@ export async function issueDocument(q: Q, o: IssueOpts) {
   const situacion = o.offline ? '3' : '1'; // 3 = issued without internet (offline POS sale synced later)
   const k = clave(o.issuedAt, s.id_number, cons, situacion, securityCode());
   return q.one(
-    `INSERT INTO e_documents (business_id, store_id, sale_id, doc_type, environment, clave, consecutivo, situacion, issued_at, receptor, reference, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [o.businessId, o.storeId, o.saleId, o.docType, s.environment, k, cons, situacion, o.issuedAt, json(o.receptor ?? null), json(o.reference ?? null), o.userId ?? null],
+    `INSERT INTO e_documents (business_id, store_id, sale_id, doc_type, environment, clave, consecutivo, situacion, issued_at, receptor, reference, created_by,
+       source, payload, currency, exchange_rate, external_ref, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+    [o.businessId, o.storeId, o.saleId ?? null, o.docType, s.environment, k, cons, situacion, o.issuedAt, json(o.receptor ?? null), json(o.reference ?? null), o.userId ?? null,
+     o.source || 'pos', json(o.payload ?? null), o.currency || 'CRC', o.currency === 'USD' ? Number(o.exchangeRate) || 1 : 1, o.externalRef ?? null, o.notes ?? null],
   );
 }
 
@@ -112,7 +124,33 @@ export async function convertToFactura(q: Q, o: { businessId: string; saleId: st
 
 // ---------------------------------------------------------------------------------------------- XML for a document
 
+function emisorOf(s: any) {
+  return {
+    nombre: s.legal_name, id_type: s.id_type, id_number: s.id_number, nombre_comercial: s.trade_name,
+    provincia: s.provincia, canton: s.canton, distrito: s.distrito, barrio: s.barrio, otras_senas: s.otras_senas, phone: s.phone, email: s.email,
+  };
+}
+
+/** Comprobante data for a manual / Cloudbeds document (lines stored on the document itself). */
+function payloadInput(d: any, s: any): BuildInput {
+  const p: DocPayload = d.payload;
+  return {
+    docType: d.doc_type, clave: d.clave, consecutivo: d.consecutivo, fecha: new Date(d.issued_at),
+    providerId: s.provider_id || s.id_number, activityCode: s.activity_code, emisor: emisorOf(s), receptor: d.receptor,
+    lines: p.lines.map((l) => {
+      const gross = Number(l.price) * Number(l.qty);
+      const discount = Math.min(gross, Number(l.discount) || 0);
+      return { qty: Number(l.qty), name: l.name, cabys: l.cabys || s.default_cabys || '', unit: l.unit || 'Unid', code: l.code || null, gross, discount, total: gross - discount, taxes: [{ rate: Number(l.tax_rate) || 0, inclusive: false }] };
+    }),
+    serviceCharge: Number(p.service_charge) || 0, servicePct: Number(p.service_pct) || 10, tip: Number(p.tip) || 0,
+    payments: (p.payments || []).map((x) => ({ type: x.type, name: x.name || x.type, amount: Number(x.amount) })),
+    references: d.reference ? [d.reference] : [],
+    currency: d.currency, exchangeRate: Number(d.exchange_rate), condition: p.condition || '01', creditDays: p.credit_days ?? null, notes: d.notes,
+  };
+}
+
 async function buildInput(d: any, s: any): Promise<BuildInput> {
+  if (d.payload?.lines) return payloadInput(d, s);
   const biz = await db.one(`SELECT service_charge_pct FROM businesses WHERE id=$1`, [d.business_id]);
   const sale = await db.one(`SELECT * FROM sales WHERE id=$1`, [d.sale_id]);
   const items = await db.query(
@@ -125,10 +163,7 @@ async function buildInput(d: any, s: any): Promise<BuildInput> {
   return {
     docType: d.doc_type, clave: d.clave, consecutivo: d.consecutivo, fecha: new Date(d.issued_at),
     providerId: s.provider_id || s.id_number, activityCode: s.activity_code,
-    emisor: {
-      nombre: s.legal_name, id_type: s.id_type, id_number: s.id_number, nombre_comercial: s.trade_name,
-      provincia: s.provincia, canton: s.canton, distrito: s.distrito, barrio: s.barrio, otras_senas: s.otras_senas, phone: s.phone, email: s.email,
-    },
+    emisor: emisorOf(s),
     receptor: d.receptor,
     lines: items.map((it) => ({
       qty: Number(it.qty),
@@ -142,7 +177,38 @@ async function buildInput(d: any, s: any): Promise<BuildInput> {
     serviceCharge: Number(sale!.service_charge), servicePct: Number(biz!.service_charge_pct) || 10, tip: Number(sale!.tip),
     payments: pays.map((p) => ({ type: p.method_type, name: p.method_name, amount: Number(p.amount) })),
     references: d.reference ? [d.reference] : [],
+    notes: d.notes || (sale!.receipt_no ? `POS #${sale!.receipt_no}` : null),
   };
+}
+
+/** Comprobante XML for display (PDF): the signed one when available, otherwise built on the fly (unsigned). */
+export async function documentXml(d: any) {
+  if (d.xml_signed) return d.xml_signed as string;
+  const s = await getSettings(db, d.business_id);
+  return buildXml(await buildInput(d, s)).xml;
+}
+
+/**
+ * Anula a manual / Cloudbeds document with a full nota de crédito (POS sales are annulled with a refund in Receipts,
+ * which also returns the stock).
+ */
+export async function annulDocument(q: Q, o: { businessId: string; docId: string; reason: string; userId?: string | null }) {
+  const d = await q.one(`SELECT * FROM e_documents WHERE id=$1 AND business_id=$2 FOR UPDATE`, [o.docId, o.businessId]);
+  if (!d) throw bad('Documento no encontrado');
+  if (d.doc_type === '03') throw bad('Una nota de crédito no se anula');
+  if (d.annulled_by) throw bad('El documento ya fue anulado');
+  if (d.replaced_by) throw bad('El documento fue sustituido por otro');
+  if (d.status === 'rejected') throw bad('Hacienda rechazó este documento: no requiere anulación');
+  if (!d.payload) throw bad('Las ventas del POS se anulan con una devolución (Recibos → Reembolsar), que también devuelve el inventario');
+  const nc = await issueDocument(q, {
+    businessId: o.businessId, storeId: d.store_id, saleId: d.sale_id, docType: '03', issuedAt: new Date(), userId: o.userId,
+    receptor: d.receptor, source: d.source, payload: d.payload, currency: d.currency, exchangeRate: Number(d.exchange_rate), externalRef: d.external_ref,
+    notes: `Anula ${DOC_NAMES[d.doc_type as DocType]} ${d.consecutivo}`,
+    reference: { doc_id: d.id, doc_type: d.doc_type, clave: d.clave, issued_at: d.issued_at, code: '01', reason: o.reason || 'Anulación del comprobante' },
+  });
+  if (!nc) throw bad('La facturación electrónica no está activada');
+  await q.query(`UPDATE e_documents SET annulled_by=$2, updated_at=now() WHERE id=$1`, [d.id, nc.id]);
+  return nc;
 }
 
 const certCache = new Map<string, SigningCert>();
@@ -231,7 +297,7 @@ async function processDoc(d: any) {
   }
   if (st.state === 'aceptado') {
     await update(d.id, { status: 'accepted', response_xml: st.responseXml, message: null, attempts: d.attempts + 1 });
-    if (d.receptor?.email) await emailDocument(d.id).catch((e) => update(d.id, { email_error: String(e.message || e) }));
+    if (d.receptor?.email && smtpConfigured()) await emailDocument(d.id).catch((e) => update(d.id, { email_error: String(e.message || e) }));
     return;
   }
   if (st.state === 'rechazado') return fail('rejected', detalle(st.responseXml) || 'Rechazado por Hacienda', { response_xml: st.responseXml });
@@ -276,8 +342,10 @@ export async function emailDocument(id: string, to?: string) {
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
   });
   const base = (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
-  const link = base ? `${base}/r/${d.sale_id}/${receiptSig(d.sale_id)}` : null;
+  const link = base ? (d.sale_id ? `${base}/r/${d.sale_id}/${receiptSig(d.sale_id)}` : `${base}/api/public/edoc/${d.id}/${receiptSig(d.id)}.pdf`) : null;
   const name = DOC_NAMES[d.doc_type as DocType];
+  const pdf = await documentPdf(d).catch((e) => { console.error('[hacienda] pdf', e); return null; });
+  const cur = d.currency === 'USD' ? 'US$' : '₡';
   await mailer.sendMail({
     from: process.env.SMTP_FROM || s?.email || process.env.SMTP_USER,
     to: email,
@@ -285,11 +353,12 @@ export async function emailDocument(id: string, to?: string) {
     html:
       `<p>Estimado(a) ${escapeHtml(d.receptor?.nombre || 'cliente')}:</p>` +
       `<p>Adjuntamos su <b>${name}</b> N° <b>${d.consecutivo}</b> emitida por ${escapeHtml(s?.legal_name || '')} ` +
-      `(${ID_TYPES[s?.id_type]?.label || 'Cédula'} ${escapeHtml(s?.id_number || '')}), por un total de ₡${Number(d.total || 0).toLocaleString('es-CR', { minimumFractionDigits: 2 })}.</p>` +
+      `(${ID_TYPES[s?.id_type]?.label || 'Cédula'} ${escapeHtml(s?.id_number || '')}), por un total de ${cur}${Number(d.total || 0).toLocaleString('es-CR', { minimumFractionDigits: 2 })}.</p>` +
       `<p>Clave: <code>${d.clave}</code></p>` +
       (link ? `<p><a href="${link}">Ver comprobante en línea</a></p>` : '') +
-      `<p>Se adjuntan el comprobante electrónico (XML) y la respuesta del Ministerio de Hacienda.</p>`,
+      `<p>Se adjuntan el comprobante en PDF, el comprobante electrónico (XML) y la respuesta del Ministerio de Hacienda.</p>`,
     attachments: [
+      ...(pdf ? [{ filename: `${d.clave}.pdf`, content: pdf, contentType: 'application/pdf' }] : []),
       { filename: `${d.clave}.xml`, content: d.xml_signed, contentType: 'application/xml' },
       ...(d.response_xml ? [{ filename: `${d.clave}_respuesta.xml`, content: d.response_xml, contentType: 'application/xml' }] : []),
     ],

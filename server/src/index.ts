@@ -19,6 +19,9 @@ import reportRoutes from './routes/reports.ts';
 import settingsRoutes, { admin } from './routes/settings.ts';
 import haciendaRoutes from './routes/hacienda.ts';
 import { startHaciendaWorker } from './hacienda/service.ts';
+import { documentPdf } from './hacienda/pdf.ts';
+import integrationRoutes, { quickbooksCallback } from './routes/integrations.ts';
+import { startIntegrationWorker } from './integrations/worker.ts';
 import payrollRoutes, { startPayrollWorker } from './payroll/index.ts';
 import { db } from './db.ts';
 import { APP_NAME, MULTI_TENANT } from './config.ts';
@@ -56,12 +59,29 @@ app.get('/api/public/receipt/:id/:sig', async (req, res, next) => {
   }
 });
 
+// Public PDF of an electronic document (QR code on the PDF, link in e-mails)
+app.get('/api/public/edoc/:id/:sig.pdf', async (req, res, next) => {
+  try {
+    if (receiptSig(req.params.id) !== req.params.sig) throw new HttpError(404, 'Documento no encontrado');
+    const d = await db.one('SELECT * FROM e_documents WHERE id=$1', [req.params.id]);
+    if (!d) throw new HttpError(404, 'Documento no encontrado');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="' + d.consecutivo + '.pdf"');
+    res.send(await documentPdf(d));
+  } catch (e) {
+    next(e);
+  }
+});
+// QuickBooks OAuth redirect (browser, no session header)
+app.get('/api/public/quickbooks/callback', quickbooksCallback);
+
 app.use('/api/auth', authRoutes);
 if (MULTI_TENANT) app.use('/api/admin', authenticate, admin);
 app.use('/api/reports', authenticate, reportRoutes);
 app.use('/api/settings', authenticate, settingsRoutes);
 app.use('/api/hacienda', authenticate, haciendaRoutes);
 app.use('/api/payroll', authenticate, payrollRoutes);
+app.use('/api/integrations', authenticate, integrationRoutes);
 app.use('/api', authenticate, catalogRoutes, salesRoutes, inventoryRoutes, peopleRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -96,6 +116,8 @@ server.listen(PORT, () => console.log(`[api] ${APP_NAME} listening on http://loc
 startHaciendaWorker();
 // Payroll: payslip e-mail queue
 startPayrollWorker();
+// Supplier invoices (mailbox + Mensaje Receptor), Cloudbeds check-outs, QuickBooks postings
+startIntegrationWorker();
 
 // Daily housekeeping: loyalty point expiry
 setInterval(() => expirePoints().catch(console.error), 24 * 3600 * 1000);

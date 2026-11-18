@@ -4,6 +4,7 @@ import { requirePerm } from '../auth.ts';
 import { ah, audit, bad, notify, pick } from '../util.ts';
 import { advanceBalances, bid, canSeePay, getOwned, isoDate, logChange, nextEmployeeCode, salaryAt, visibleDepartments, who } from './common.ts';
 import { mergeRules } from '../../../shared/payroll.ts';
+import { assertLinkable } from './pos.ts';
 
 const r = Router();
 
@@ -122,6 +123,7 @@ r.post('/employees', requirePerm('payroll.employees'), ah(async (req, res) => {
   if (!req.auth.permissions.has('payroll.salary')) for (const f of PAY_FIELDS) delete d[f];
   const u = who(req);
   const row = await tx(async (q) => {
+    if (d.user_id) await assertLinkable(q, bid(req), d.user_id);
     if (d.cedula) {
       const dup = await q.one(`SELECT full_name FROM pr_employees WHERE business_id=$1 AND regexp_replace(cedula,'\\D','','g')=regexp_replace($2,'\\D','','g')`, [bid(req), d.cedula]);
       if (dup) throw bad(`Cédula ${d.cedula} already belongs to ${dup.full_name}`);
@@ -156,6 +158,7 @@ r.put('/employees/:id', requirePerm('payroll.employees'), ah(async (req, res) =>
     if (dup) throw bad(`Cédula ${d.cedula} already belongs to ${dup.full_name}`);
   }
   const row = await tx(async (q) => {
+    if (keys.includes('user_id') && d.user_id) await assertLinkable(q, bid(req), d.user_id, old.id);
     const e = await q.one(`UPDATE pr_employees SET ${keys.map((k, i) => `${k}=$${i + 2}`).join(', ')}, updated_at=now() WHERE id=$1 RETURNING *`,
       [old.id, ...keys.map((k) => d[k])]);
     for (const k of keys) {

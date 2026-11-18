@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { money } from '../../lib/format';
 import { PageHeader, Spinner, Stat, useAsync } from '../../components/ui';
 import { Bars, ChartCard, HBars, MONTHS, PeriodBadge, YearSelect, pr, short } from '../lib';
+import PosStaffPanel from './PosStaffPanel';
 
 export default function Dashboard() {
   const [f, setF] = useState({ year: new Date().getFullYear(), month: '', period_id: '', department_id: '', employee_id: '', payment_status: '' });
@@ -37,6 +38,7 @@ export default function Dashboard() {
           {L.pending.vacation > 0 && <Link to="/backoffice/payroll/leave" className="rounded-lg bg-amber-50 px-3 py-1.5 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">{L.pending.vacation} vacation request(s)</Link>}
         </div>
       )}
+      <PosStaffPanel />
       {loading || !data ? <div className="flex justify-center py-20"><Spinner /></div> : (
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

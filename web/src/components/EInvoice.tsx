@@ -68,7 +68,7 @@ export const EDocStatus = ({ status }: { status: string }) => {
 };
 
 /** Compact list of a sale's electronic documents with their Hacienda status. */
-export function EDocList({ docs, onDownload }: { docs: any[]; onDownload?: (d: any, kind: 'signed' | 'response') => void }) {
+export function EDocList({ docs, onDownload }: { docs: any[]; onDownload?: (d: any, kind: 'signed' | 'response' | 'pdf') => void }) {
   if (!docs?.length) return null;
   return (
     <div className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
@@ -84,6 +84,7 @@ export function EDocList({ docs, onDownload }: { docs: any[]; onDownload?: (d: a
           {d.message && d.status !== 'accepted' && <div className="text-xs text-rose-600">{d.message}</div>}
           {onDownload && (
             <div className="mt-0.5 flex gap-3 text-xs">
+              <button className="text-brand-700 hover:underline" onClick={() => onDownload(d, 'pdf')}>PDF</button>
               <button className="text-brand-700 hover:underline" onClick={() => onDownload(d, 'signed')}>XML</button>
               {d.status === 'accepted' || d.status === 'rejected' ? <button className="text-brand-700 hover:underline" onClick={() => onDownload(d, 'response')}>Respuesta Hacienda</button> : null}
             </div>

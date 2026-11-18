@@ -33,6 +33,10 @@ ok(hol.some((h) => h.name === 'Viernes Santo' && h.holiday_date.startsWith('2026
 const roles = (await api('GET', '/roles', null, T)).data;
 ok(['Payroll Admin', 'HR Manager', 'Payroll Accountant', 'Department Manager', 'Auditor', 'Employee'].every((n) => roles.some((r) => r.name === n)), 'payroll roles created');
 
+// POS staff join payroll automatically (payroll/autosync.ts); the checks below count them on top of the test's own 4.
+const SYNCED = (await P('GET', '/pos-staff')).data.staff.filter((s) => s.employee_id && s.active).length;
+ok(SYNCED >= 4, `active POS staff already in payroll automatically (${SYNCED})`);
+
 console.log('Employees & effective-dated salary');
 const mk = async (b) => (await P('POST', '/employees', b));
 const empA = await mk({ full_name: 'Ana Maria Prueba Uno', short_name: 'Ana', cedula: '100000001', email: 'ana@example.com', department_id: dept.BAR.id, employment_type: 'monthly', joining_date: '2024-01-10', payment_method: 'cash', salary: { salary_type: 'monthly', monthly_salary: 480000, effective_from: '2024-01-10' } });
@@ -71,7 +75,7 @@ const per = await P('POST', '/periods', { start_date: '2026-10-23', end_date: '2
 ok(per.status === 201 && per.data.code === 'PP-2026-01', 'create payroll period', per.data);
 let PER = (await P('GET', `/periods/${per.data.id}`)).data;
 const rec = (id) => PER.records.find((r) => r.employee_id === id);
-ok(PER.records.length === 4, '4 employees included');
+ok(PER.records.length === 4 + SYNCED, `${4 + SYNCED} employees included (4 test + ${SYNCED} from POS)`, PER.records.length);
 ok(rec(J).hours === 66 && rec(J).monthly_salary === 480000, 'hours loaded from attendance; salary effective at period end (480,000 not 500,000)');
 ok(near(rec(J).gross, 165000) && near(rec(J).caja, 17869.5), 'monthly: gross = 240,000 × 66/96 = 165,000; CAJA 10.83%', rec(J));
 ok(rec(PB).overtime_hours === 0 && rec(PB).warnings.some((w) => w.code === 'excess_hours') === false, 'unapproved overtime is not paid');
@@ -168,7 +172,7 @@ ok(near(summary.totals.total, per2.totals.payroll_expense), 'annual total reconc
 const labor = (await P('GET', '/reports/labor?year=2026')).data;
 ok(near(labor.months[10].labor_pct, Math.round((per2.totals.payroll_expense / 10000000) * 10000) / 100), 'labour % = payroll ÷ revenue × 100', labor.months[10]);
 const dash = (await P('GET', '/dashboard?year=2026')).data;
-ok(dash.kpi.active_employees === 4 && near(dash.kpi.paid, per2.totals.paid) && dash.kpi.cash_paid > 0 && dash.kpi.bank_paid > 0, 'dashboard KPIs (active, paid, cash vs bank)', dash.kpi);
+ok(dash.kpi.active_employees === 4 + SYNCED && near(dash.kpi.paid, per2.totals.paid) && dash.kpi.cash_paid > 0 && dash.kpi.bank_paid > 0, 'dashboard KPIs (active, paid, cash vs bank)', dash.kpi);
 const rec1 = (await P('GET', '/reconciliation?year=2026')).data;
 const line = rec1.rows.find((x) => x.period_id === per.data.id);
 ok(line && near(line.payroll_amount, per2.totals.paid) && line.status === 'pending', 'reconciliation line created per period');
@@ -178,7 +182,7 @@ ok(rec2.status === 'difference' && rec2.cashbook_vs_qbo === -2679, 'difference f
 
 console.log('Aguinaldo');
 const ag = await P('POST', '/aguinaldo/calculate', { year: 2026 });
-ok(ag.data.calculated === 4, 'aguinaldo calculated for 4 employees');
+ok(ag.data.calculated === 4 + SYNCED, `aguinaldo calculated for ${4 + SYNCED} employees`, ag.data.calculated);
 const agRows = (await P('GET', '/aguinaldo?year=2026')).data;
 const agJ = agRows.find((a) => a.employee_id === J);
 const jEarn = per2.records.find((r) => r.employee_id === J).earnings;
@@ -213,6 +217,61 @@ const audit = (await P('GET', '/audit')).data;
 const sal = audit.find((a) => a.action === 'payroll_salary_change');
 ok(sal && sal.details.previous.monthly_salary === 480000 && sal.details.new.monthly_salary === 500000, 'salary change audited with previous and new salary');
 ok(['payroll_approve', 'payroll_manual_adjustment', 'payroll_payment', 'payroll_reject'].every((a) => audit.some((x) => x.action === a)), 'approval, manual adjustment, payment and rejection audited');
+
+console.log('POS staff integration');
+{
+  const login = (await api('POST', '/auth/login', { email: 'owner@demo.com', password: 'demo123' })).data;
+  const store = login.stores[0].id;
+  const cashierRole = roles.find((r) => r.name === 'Employee') || roles[0];
+  // Two POS staff: one hourly, one monthly with an employee code and a designation that matches a payroll position
+  const posA = await api('POST', '/employees', { name: 'Maria Cajera', email: 'maria.pos@example.com', password: 'maria12345', role_id: cashierRole.id, employee_code: 'P-77', designation: positions[0].name, joined_on: '2025-03-01', hourly_rate: 2500, phone: '8888-0000', active: true }, T);
+  const posB = await api('POST', '/employees', { name: 'Pedro Mesero', email: 'pedro.pos@example.com', password: 'pedro12345', role_id: cashierRole.id, joined_on: '2024-07-15', salary: 450000, active: true }, T);
+  ok(posA.status === 201 && posB.status === 201, 'POS staff created in the POS');
+  // An existing payroll employee entered by hand with the same e-mail as a third POS user should be suggested as a match
+  const posC = await api('POST', '/employees', { name: 'Rosa Cocina', email: 'rosa.pos@example.com', password: 'rosa123456', role_id: cashierRole.id, active: true }, T);
+  const manual = await P('POST', '/employees', { full_name: 'Rosa Elena Cocina', email: 'ROSA.pos@example.com', department_id: dept.BAR.id, employment_type: 'monthly', joining_date: '2024-01-01', salary: { salary_type: 'monthly', monthly_salary: 400000, effective_from: '2024-01-01' } });
+  let ps = (await P('GET', '/pos-staff')).data;
+  const a = ps.staff.find((s) => s.id === posA.data.id), c = ps.staff.find((s) => s.id === posC.data.id);
+  ok(a && !a.employee_id && Number(a.hourly_rate) === 2500, 'POS staff listed as not in payroll, with POS rate');
+  ok(c && c.suggested_employee_id === manual.data.id, 'existing payroll employee suggested by matching e-mail');
+
+  const imp = await P('POST', '/pos-staff/import', { items: [{ user_id: posA.data.id, department_id: dept.BAR.id, payment_method: 'cash' }, { user_id: posB.data.id }] });
+  ok(imp.status === 201 && imp.data.created.length === 2 && !imp.data.skipped.length, 'two POS staff added to payroll', imp.data);
+  const ea = imp.data.created.find((e) => e.user_id === posA.data.id), eb = imp.data.created.find((e) => e.user_id === posB.data.id);
+  ok(ea.code === 'P-77' && ea.employment_type === 'hourly' && ea.payment_method === 'cash' && ea.department_id === dept.BAR.id && ea.position_id === positions[0].id && ea.phone === '8888-0000' && String(ea.joining_date).startsWith('2025-03-01'),
+    'POS details carried over (code, type, department, position, phone, joining date)', ea);
+  const eaFull = (await P('GET', `/employees/${ea.id}`)).data;
+  const ebFull = (await P('GET', `/employees/${eb.id}`)).data;
+  ok(eaFull.salary?.hourly_rate === 2500 || eaFull.salary_type === 'hourly' || JSON.stringify(eaFull).includes('2500'), 'hourly rate carried over as salary history', eaFull.salary);
+  ok(/^E\d{4}$/.test(eb.code) && eb.employment_type === 'monthly' && JSON.stringify(ebFull).includes('450000'), 'monthly salary carried over; code generated when POS has none');
+  const again = await P('POST', '/pos-staff/import', { items: [{ user_id: posA.data.id }] });
+  ok(again.data.created.length === 0 && again.data.skipped.length === 1 && /already linked/.test(again.data.skipped[0].reason), 'the same POS user cannot be added twice', again.data);
+
+  const lk = await P('POST', '/pos-staff/link', { employee_id: manual.data.id, user_id: posC.data.id });
+  ok(lk.status === 200 && lk.data.user_id === posC.data.id, 'existing payroll employee linked to POS user');
+  const dupLink = await P('PUT', `/employees/${eb.id}`, { full_name: eb.full_name, user_id: posC.data.id });
+  ok(dupLink.status === 400, 'one POS user cannot be linked to two payroll employees', dupLink.data);
+  ps = (await P('GET', '/pos-staff')).data;
+  ok([posA, posB, posC].every((p) => ps.staff.find((s) => s.id === p.data.id)?.employee_id), 'all three show as linked');
+
+  // POS time clock → payroll attendance for the linked employee
+  const MT2 = (await api('POST', '/auth/login', { email: 'maria.pos@example.com', password: 'maria12345' })).data.token;
+  const cin = await fetch(BASE + '/api/timeclock/in', { method: 'POST', headers: { Authorization: 'Bearer ' + MT2, 'X-Store-Id': store } }).then((r) => r.json());
+  await fetch(BASE + '/api/timeclock/out', { method: 'POST', headers: { Authorization: 'Bearer ' + MT2, 'X-Store-Id': store } });
+  const fix = await api('PUT', `/timeclock/${cin.id}`, { clock_in: '2026-09-01T08:00:00-06:00', clock_out: '2026-09-01T16:00:00-06:00', break_minutes: 30 }, T);
+  ok(fix.status === 200, 'time clock entry set to 1 Sep 08:00–16:00 with 30 min break');
+  const tc = await P('POST', '/attendance/from-timeclock', { from: '2026-09-01', to: '2026-09-01' });
+  const att = (await P('GET', `/attendance?from=2026-09-01&to=2026-09-01&employee_id=${ea.id}`)).data;
+  const day = (Array.isArray(att) ? att : att.rows || []).find((x) => x.employee_id === ea.id);
+  ok(tc.data.saved >= 1 && day && Number(day.regular_hours) === 7.5, 'POS time clock loaded into payroll attendance (7.5 h)', { tc: tc.data, day });
+
+  // Self-service: the POS login now opens the employee's own payroll page
+  const me = await api('GET', '/payroll/me', null, MT2);
+  ok(me.status === 200 && me.data.employee.id === ea.id, 'POS login sees own payroll (self-service)');
+
+  const ul = await P('POST', '/pos-staff/link', { employee_id: manual.data.id, user_id: null });
+  ok(ul.status === 200 && ul.data.user_id === null, 'unlink keeps the payroll employee');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

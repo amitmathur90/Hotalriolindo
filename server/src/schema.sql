@@ -507,3 +507,80 @@ CREATE TABLE IF NOT EXISTS e_documents (
 CREATE INDEX IF NOT EXISTS e_documents_sale_idx ON e_documents(sale_id);
 CREATE INDEX IF NOT EXISTS e_documents_queue_idx ON e_documents(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS e_documents_business_idx ON e_documents(business_id, created_at);
+
+-- ---------------------------------------------------------------- Cubo replacement (manual invoices, USD, suppliers, integrations)
+-- Documents not tied to a POS sale (manual invoices, Cloudbeds check-outs) keep their lines in payload.
+ALTER TABLE e_documents ALTER COLUMN sale_id DROP NOT NULL;
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'pos';        -- pos | manual | cloudbeds
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS payload jsonb;                             -- {lines, payments, condition, credit_days, notes, service_charge, tip}
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'CRC';      -- CRC | USD
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS exchange_rate numeric NOT NULL DEFAULT 1;  -- colones per document currency unit
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS external_ref text;                         -- e.g. Cloudbeds reservation ID
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS notes text;
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS annulled_by uuid;                          -- nota de crédito that annulled it
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS terminal text NOT NULL DEFAULT '00001';
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS usd_rate_manual numeric;             -- fixed T/C (else Hacienda/BCCR daily rate)
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_host text;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_port integer;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_user text;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_pass_enc text;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_last_check timestamptz;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS imap_error text;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS auto_accept boolean NOT NULL DEFAULT false;
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS expense_category text;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS supplier_id uuid;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS received_doc_id uuid;
+
+CREATE TABLE IF NOT EXISTS exchange_rates (
+  currency text NOT NULL, rate_date date NOT NULL,
+  buy numeric, sell numeric NOT NULL, source text NOT NULL DEFAULT 'hacienda',
+  PRIMARY KEY (currency, rate_date)
+);
+
+-- Supplier comprobantes received (Doc Recibidos) and our Mensaje Receptor answer.
+CREATE TABLE IF NOT EXISTS received_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  clave text NOT NULL, doc_type text NOT NULL, consecutivo text,
+  issued_at timestamptz, emisor_name text, emisor_id_type text, emisor_id text, emisor_email text,
+  receptor_id text, currency text NOT NULL DEFAULT 'CRC', exchange_rate numeric NOT NULL DEFAULT 1,
+  total numeric NOT NULL DEFAULT 0, total_tax numeric NOT NULL DEFAULT 0, activity_code text,
+  xml text NOT NULL, source text NOT NULL DEFAULT 'upload',                -- upload | email
+  decision text,                                                           -- 05 aceptado | 06 parcial | 07 rechazado
+  decision_detail text, condicion_impuesto text,
+  mr_consecutivo text, mr_status text,                                     -- pending | sent | accepted | rejected | error
+  mr_message text, mr_xml text, mr_response_xml text, mr_attempts integer NOT NULL DEFAULT 0, mr_next_attempt_at timestamptz,
+  expense_id uuid, supplier_id uuid, expense_category text,
+  decided_by uuid, decided_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (business_id, clave)
+);
+CREATE INDEX IF NOT EXISTS received_documents_queue_idx ON received_documents(mr_status, mr_next_attempt_at);
+
+-- External systems (Cloudbeds, QuickBooks Online): settings with secrets encrypted inside config.
+CREATE TABLE IF NOT EXISTS integrations (
+  business_id uuid NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  provider text NOT NULL,
+  enabled boolean NOT NULL DEFAULT false,
+  config jsonb NOT NULL DEFAULT '{}',
+  last_sync_at timestamptz, last_error text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS cloudbeds_reservations (
+  business_id uuid NOT NULL, reservation_id text NOT NULL,
+  guest_name text, check_in date, check_out date, total numeric, currency text,
+  status text NOT NULL DEFAULT 'new',                                      -- new | issued | skipped | error
+  e_document_id uuid, message text, data jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, reservation_id)
+);
+
+-- What was sent to QuickBooks (one journal entry per day, one bill per supplier invoice).
+CREATE TABLE IF NOT EXISTS qb_postings (
+  business_id uuid NOT NULL, kind text NOT NULL, ref text NOT NULL,       -- kind: sales_day | bill ; ref: YYYY-MM-DD | received_documents.id
+  qb_id text, status text NOT NULL DEFAULT 'ok', message text, amount numeric,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, kind, ref)
+);

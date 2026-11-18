@@ -5,6 +5,7 @@ import { ALL_PERMISSIONS, hashPin, requirePerm, requireStore, requireUser } from
 import { crud } from '../crud.ts';
 import { HttpError, ah, audit, bad, notFound, notify, num, range } from '../util.ts';
 import { r2 } from '../../../shared/pricing.ts';
+import { kickPayrollSync } from '../payroll/autosync.ts';
 
 const r = Router();
 
@@ -180,8 +181,17 @@ async function saveEmployee(req: any, id: string | null) {
   await audit(req, id ? 'update' : 'create', 'employees', uid, { name: b.name, role_id: b.role_id, pin_changed: !!pinHash, password_changed: !!b.password });
   return uid;
 }
-r.post('/employees', requirePerm('employees.manage'), ah(async (req, res) => res.status(201).json({ id: await saveEmployee(req, null) })));
-r.put('/employees/:id', requirePerm('employees.manage'), ah(async (req, res) => res.json({ id: await saveEmployee(req, req.params.id) })));
+// Saving POS staff also updates payroll (new staff are added, deactivated staff are deactivated) a few seconds later
+r.post('/employees', requirePerm('employees.manage'), ah(async (req, res) => {
+  const id = await saveEmployee(req, null);
+  kickPayrollSync(req.auth.businessId);
+  res.status(201).json({ id });
+}));
+r.put('/employees/:id', requirePerm('employees.manage'), ah(async (req, res) => {
+  const id = await saveEmployee(req, req.params.id);
+  kickPayrollSync(req.auth.businessId);
+  res.json({ id });
+}));
 
 // ================================================================ Time clock & attendance
 r.get('/timeclock/status', requireUser, ah(async (req, res) => {
@@ -206,6 +216,7 @@ r.post('/timeclock/:action(in|out|break_start|break_end)', requireUser, requireS
     }
   }
   await audit(req, `timeclock_${a}`, 'time_entries', row!.id);
+  kickPayrollSync(req.auth.businessId); // POS time clock → payroll attendance
   res.json(row);
 }));
 
@@ -232,36 +243,8 @@ r.put('/timeclock/:id', requirePerm('timeclock.manage'), ah(async (req, res) => 
   );
   if (!row) throw notFound('Time entry');
   await audit(req, 'correct_timeclock', 'time_entries', row.id, req.body);
+  kickPayrollSync(req.auth.businessId);
   res.json(row);
-}));
-
-// Payroll preparation: hours, overtime (>8h/day), late arrivals vs. shift start, gross pay
-r.get('/payroll', requirePerm('employees.manage', 'reports.view'), ah(async (req, res) => {
-  const { from, to } = range(req);
-  const shiftStart = String(req.query.shift_start || '09:30');
-  const dailyHours = num(req.query.daily_hours, 8);
-  const rows = await db.query(
-    `SELECT u.id, u.name, u.employee_code, u.salary, u.hourly_rate, t.clock_in, t.clock_out, t.break_minutes
-       FROM users u LEFT JOIN time_entries t ON t.user_id=u.id AND t.clock_in >= $2 AND t.clock_in < $3 AND t.clock_out IS NOT NULL
-      WHERE u.business_id=$1 AND u.active ORDER BY u.name`, [req.auth.businessId, from, to]);
-  const map = new Map<string, any>();
-  for (const x of rows) {
-    if (!map.has(x.id)) map.set(x.id, { id: x.id, name: x.name, employee_code: x.employee_code, salary: Number(x.salary), hourly_rate: Number(x.hourly_rate), days: new Set(), hours: 0, overtime: 0, late: 0 });
-    const e = map.get(x.id);
-    if (!x.clock_in) continue;
-    const h = Math.max(0, (new Date(x.clock_out).getTime() - new Date(x.clock_in).getTime()) / 3600000 - x.break_minutes / 60);
-    e.hours += h;
-    e.overtime += Math.max(0, h - dailyHours);
-    const ci = new Date(x.clock_in);
-    e.days.add(ci.toDateString());
-    const [hh, mm] = shiftStart.split(':').map(Number);
-    if (ci.getHours() * 60 + ci.getMinutes() > hh * 60 + mm + 5) e.late++;
-  }
-  res.json([...map.values()].map((e) => {
-    const regular = e.hours - e.overtime;
-    const gross = e.hourly_rate > 0 ? regular * e.hourly_rate + e.overtime * e.hourly_rate * 1.5 : e.salary;
-    return { ...e, days: e.days.size, hours: r2(e.hours), overtime: r2(e.overtime), gross_pay: r2(gross) };
-  }));
 }));
 
 // ================================================================ Shifts & cash management

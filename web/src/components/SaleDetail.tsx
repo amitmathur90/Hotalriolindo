@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Printer, FileText, Undo2, Copy, Landmark } from 'lucide-react';
-import type { Client } from '../lib/api';
+import { openFile, type Client } from '../lib/api';
 import { money, qty as fq, uuid } from '../lib/format';
 import { Receipt, receiptEDoc } from './Receipt';
 import { EDocList, ReceptorForm, receptorError, receptorFromCustomer, type ReceptorInput } from './EInvoice';
@@ -41,8 +41,9 @@ export function SaleDetail({ sale, business, api, canRefund, requestApproval, on
       setBusy(false);
     }
   }
-  async function downloadXml(d: any, kind: 'signed' | 'response') {
+  async function downloadXml(d: any, kind: 'signed' | 'response' | 'pdf') {
     try {
+      if (kind === 'pdf') return await openFile(api, `/hacienda/documents/${d.id}/pdf`);
       const xml = await api<string>(`/hacienda/documents/${d.id}/xml${kind === 'response' ? '?kind=response' : ''}`, { text: true });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));

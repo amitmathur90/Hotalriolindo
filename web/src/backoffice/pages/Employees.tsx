@@ -1,21 +1,20 @@
 import { useState } from 'react';
 import { Plus, Pencil } from 'lucide-react';
 import { boApi } from '../../lib/api';
-import { dateOnly, dt, money } from '../../lib/format';
+import { dateOnly, dt } from '../../lib/format';
 import { Badge, Empty, Field, Modal, PageHeader, Spinner, Tabs, Toggle, useAsync, useToast } from '../../components/ui';
 import { useSession } from '../BackOffice';
 import { ExportButtons, useRange } from '../widgets';
 
 export default function Employees() {
-  const [tab, setTab] = useState<'list' | 'roles' | 'time' | 'payroll' | 'logins'>('list');
+  const [tab, setTab] = useState<'list' | 'roles' | 'time' | 'logins'>('list');
   return (
     <div>
-      <PageHeader title="Employees" subtitle="Staff, access rights, attendance and payroll preparation" />
-      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'list', label: 'Employees' }, { id: 'roles', label: 'Access rights' }, { id: 'time', label: 'Timecards' }, { id: 'payroll', label: 'Payroll' }, { id: 'logins', label: 'Login history' }]} />
+      <PageHeader title="Employees" subtitle="Staff, access rights and attendance · pay is managed in Payroll" />
+      <Tabs value={tab} onChange={setTab} tabs={[{ id: 'list', label: 'Employees' }, { id: 'roles', label: 'Access rights' }, { id: 'time', label: 'Timecards' }, { id: 'logins', label: 'Login history' }]} />
       {tab === 'list' && <EmployeeList />}
       {tab === 'roles' && <Roles />}
       {tab === 'time' && <Timecards />}
-      {tab === 'payroll' && <Payroll />}
       {tab === 'logins' && <Logins />}
     </div>
   );
@@ -198,38 +197,6 @@ function Timecards() {
           <Field label="Reason for correction"><input className="input" value={e.note || ''} onChange={(x) => setE({ ...e, note: x.target.value })} /></Field>
         </div>}
       </Modal>
-    </div>
-  );
-}
-
-function Payroll() {
-  const range = useRange('month');
-  const [start, setStart] = useState('09:30');
-  const { data, loading } = useAsync(() => boApi<any[]>(`/payroll?${range.query}&shift_start=${start}`), [range.query, start]);
-  const cols = ['name', 'employee_code', 'days', 'hours', 'overtime', 'late', 'hourly_rate', 'salary', 'gross_pay'].map((k) => ({ key: k, label: k }));
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3">{range.ui}<label className="flex items-center gap-2 text-sm">Shift starts <input type="time" className="input w-auto py-1.5" value={start} onChange={(e) => setStart(e.target.value)} /></label></div>
-        <ExportButtons name="payroll" rows={data || []} cols={cols} />
-      </div>
-      <div className="card overflow-x-auto">
-        {loading ? <Spinner /> : (
-          <table className="table">
-            <thead><tr><th>Employee</th><th className="text-right">Days</th><th className="text-right">Hours</th><th className="text-right">Overtime</th><th className="text-right">Late arrivals</th><th className="text-right">Rate</th><th className="text-right">Gross pay</th></tr></thead>
-            <tbody>{data?.map((p) => (
-              <tr key={p.id}>
-                <td className="font-medium">{p.name}<div className="text-xs text-slate-400">{p.employee_code}</div></td>
-                <td className="text-right">{p.days}</td><td className="text-right tabular-nums">{p.hours}</td><td className="text-right tabular-nums">{p.overtime}</td>
-                <td className={`text-right ${p.late ? 'text-amber-600' : ''}`}>{p.late}</td>
-                <td className="text-right text-xs">{p.hourly_rate ? `${money(p.hourly_rate)}/h` : `${money(p.salary)}/mo`}</td>
-                <td className="text-right font-medium tabular-nums">{money(p.gross_pay)}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        )}
-      </div>
-      <p className="mt-2 text-xs text-slate-500">Overtime = hours beyond 8 per day, paid at 1.5× hourly rate. Salaried staff show monthly salary. Export and review before approving payroll.</p>
     </div>
   );
 }

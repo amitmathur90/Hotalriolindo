@@ -83,7 +83,7 @@ export function crDateTime(d: Date) {
 }
 
 /** NumeroConsecutivo (20): sucursal(3) + terminal(5) + tipo(2) + número(10). */
-export function consecutivo(branch: string, terminal: string, doc: DocType, n: number) {
+export function consecutivo(branch: string, terminal: string, doc: DocType | '05' | '06' | '07', n: number) {
   return digits(branch).padStart(3, '0').slice(-3) + digits(terminal).padStart(5, '0').slice(-5) + doc + String(n).padStart(10, '0');
 }
 

@@ -182,23 +182,29 @@ r.put('/revenue', requirePerm('payroll.reports'), ah(async (req, res) => {
 /** Fill revenue from POS sales: categories routed to the Bar station = bar revenue, other kitchen stations = food. Net of tax and refunds. */
 r.post('/revenue/from-pos', requirePerm('payroll.reports'), ah(async (req, res) => {
   const year = Number(req.body?.year) || new Date().getFullYear();
-  const tz = (await db.one(`SELECT timezone FROM businesses WHERE id=$1`, [bid(req)]))?.timezone || 'America/Costa_Rica';
+  const months = await revenueFromPos(bid(req), year, req.body?.overwrite_manual === true);
+  await audit(req, 'revenue_from_pos', 'pr_revenue', null, { year, months });
+  res.json({ months });
+}));
+
+/** Monthly revenue from POS sales (bar / food / other, net of tax and refunds). Manual revenue is kept unless overwrite. */
+export async function revenueFromPos(businessId: string, year: number, overwriteManual = false) {
+  const tz = (await db.one(`SELECT timezone FROM businesses WHERE id=$1`, [businessId]))?.timezone || 'America/Costa_Rica';
   const rows = await db.query(
     `SELECT EXTRACT(MONTH FROM s.created_at AT TIME ZONE $3)::int AS month,
             COALESCE(sum((i.total - i.tax) * CASE WHEN s.type='refund' THEN -1 ELSE 1 END) FILTER (WHERE lower(c.kitchen_station)='bar'),0) AS bar,
             COALESCE(sum((i.total - i.tax) * CASE WHEN s.type='refund' THEN -1 ELSE 1 END) FILTER (WHERE c.kitchen_station IS NOT NULL AND lower(c.kitchen_station)<>'bar'),0) AS food,
             COALESCE(sum((i.total - i.tax) * CASE WHEN s.type='refund' THEN -1 ELSE 1 END) FILTER (WHERE c.kitchen_station IS NULL),0) AS other
        FROM sales s JOIN sale_items i ON i.sale_id=s.id LEFT JOIN categories c ON c.id=i.category_id
-      WHERE s.business_id=$1 AND EXTRACT(YEAR FROM s.created_at AT TIME ZONE $3)=$2 GROUP BY 1`, [bid(req), year, tz]);
+      WHERE s.business_id=$1 AND EXTRACT(YEAR FROM s.created_at AT TIME ZONE $3)=$2 GROUP BY 1`, [businessId, year, tz]);
   for (const x of rows)
     await db.query(
       `INSERT INTO pr_revenue (business_id, year, month, bar_revenue, food_revenue, other_revenue, source) VALUES ($1,$2,$3,$4,$5,$6,'pos')
        ON CONFLICT (business_id, year, month) DO UPDATE SET bar_revenue=EXCLUDED.bar_revenue, food_revenue=EXCLUDED.food_revenue, other_revenue=EXCLUDED.other_revenue, source='pos', updated_at=now()
        WHERE pr_revenue.source <> 'manual' OR $7`,
-      [bid(req), year, x.month, r2(Number(x.bar)), r2(Number(x.food)), r2(Number(x.other)), req.body?.overwrite_manual === true]);
-  await audit(req, 'revenue_from_pos', 'pr_revenue', null, { year, months: rows.length });
-  res.json({ months: rows.length });
-}));
+      [businessId, year, x.month, r2(Number(x.bar)), r2(Number(x.food)), r2(Number(x.other)), overwriteManual]);
+  return rows.length;
+}
 
 // ---------------------------------------------------------------- Cashbook vs QuickBooks reconciliation (Module 17)
 const TOL = 1;

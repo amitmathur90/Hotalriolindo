@@ -4,7 +4,7 @@ export class ApiError extends Error {
   }
 }
 
-export type Client = <T = any>(path: string, opts?: { method?: string; body?: any; headers?: Record<string, string>; text?: boolean }) => Promise<T>;
+export type Client = <T = any>(path: string, opts?: { method?: string; body?: any; headers?: Record<string, string>; text?: boolean; blob?: boolean }) => Promise<T>;
 
 /** Creates an API client bound to a token + store provider. */
 export function makeClient(getToken: () => string | null, getStore: () => string | null = () => null, onUnauthorized?: () => void): Client {
@@ -24,6 +24,7 @@ export function makeClient(getToken: () => string | null, getStore: () => string
     } catch {
       throw new ApiError(0, 'No connection to server', true);
     }
+    if (opts.blob && res.ok) return (await res.blob()) as any; // e.g. PDF downloads
     const raw = await res.text().catch(() => '');
     let data: any = null;
     try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
@@ -46,3 +47,23 @@ export const boApi = makeClient(() => bo.token, () => bo.store, () => {
   bo.token = null;
   if (!location.pathname.startsWith('/login')) location.href = '/login';
 });
+
+/** Fetches a file with the session (e.g. an invoice PDF) and opens it in a new tab (or downloads it). */
+export async function openFile(api: Client, path: string, filename?: string) {
+  const win = filename ? null : window.open('', '_blank');
+  try {
+    const blob = await api<Blob>(path, { blob: true });
+    const url = URL.createObjectURL(blob);
+    if (win) win.location.href = url;
+    else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename!;
+      a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    win?.close();
+    throw e;
+  }
+}

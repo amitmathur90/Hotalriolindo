@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, XCircle, Upload, RefreshCw, PlugZap, Mail } from 'lucide-react';
-import { boApi } from '../../lib/api';
+import { CheckCircle2, XCircle, Upload, RefreshCw, PlugZap, Mail, FileText, Ban, DollarSign } from 'lucide-react';
+import { boApi, openFile } from '../../lib/api';
+import { CabysPicker } from '../../components/CabysPicker';
+import ManualInvoice, { fmtCur } from './hacienda/ManualInvoice';
+import Received from './hacienda/Received';
 import { dt, money } from '../../lib/format';
 import { Badge, Empty, Field, PageHeader, SearchInput, Spinner, Tabs, Toggle, useAsync, useToast } from '../../components/ui';
 import { SaleDetail } from '../../components/SaleDetail';
@@ -12,12 +15,19 @@ import { ExportButtons, useRange } from '../widgets';
 /** Costa Rica electronic invoicing (Ministerio de Hacienda, v4.4): documents and configuration. */
 export default function Hacienda() {
   const { can } = useSession();
-  const [tab, setTab] = useState<'docs' | 'config'>('docs');
+  const [tab, setTab] = useState<'docs' | 'new' | 'received' | 'config'>('docs');
+  const [fx, setFx] = useState<any>(null);
+  useEffect(() => { boApi('/hacienda/fx').then(setFx).catch(() => {}); }, []);
+  const tabs: { id: typeof tab; label: string }[] = [{ id: 'docs', label: 'Emitidos' }];
+  if (can('settings.manage') || can('pos.sell')) tabs.push({ id: 'new', label: 'Nueva factura' });
+  if (can('settings.manage') || can('purchases.manage')) tabs.push({ id: 'received', label: 'Recibidos (proveedores)' });
+  if (can('settings.manage')) tabs.push({ id: 'config', label: 'Configuración' });
   return (
     <div>
-      <PageHeader title="Hacienda · Facturación electrónica" subtitle="Tiquetes, facturas y notas de crédito electrónicas (versión 4.4)" />
-      {can('settings.manage') && <div className="mb-4"><Tabs tabs={[{ id: 'docs', label: 'Comprobantes' }, { id: 'config', label: 'Configuración' }]} value={tab} onChange={setTab} /></div>}
-      {tab === 'docs' ? <Documents /> : <Config />}
+      <PageHeader title="Hacienda · Facturación electrónica" subtitle="Tiquetes, facturas y notas de crédito electrónicas (versión 4.4)"
+        actions={fx?.rate ? <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-sm dark:bg-slate-800" title={`Tipo de cambio de venta ${fx.date}${fx.source === 'manual' ? ' (fijo)' : ' · Hacienda/BCCR'}`}><DollarSign size={14} />T/C: <b>₡{Number(fx.rate).toFixed(2)}</b></span> : undefined} />
+      {tabs.length > 1 && <div className="mb-4"><Tabs tabs={tabs} value={tab} onChange={setTab} /></div>}
+      {tab === 'docs' ? <Documents /> : tab === 'new' ? <ManualInvoice /> : tab === 'received' ? <Received /> : <Config />}
     </div>
   );
 }
@@ -55,13 +65,28 @@ function Documents() {
       setBusy(null);
     }
   };
+  const annul = async (d: any) => {
+    const reason = prompt('Motivo de la anulación (se envía a Hacienda en la nota de crédito):', 'Anulación a solicitud del cliente');
+    if (!reason) return;
+    setBusy(d.id + 'annul');
+    try {
+      const nc = await boApi(`/hacienda/documents/${d.id}/annul`, { body: { reason } });
+      toast(`Nota de crédito N° ${nc.consecutivo} emitida`);
+      reload();
+    } catch (e: any) {
+      toast(e.message, 'err');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const pdf = (d: any) => openFile(boApi, `/hacienda/documents/${d.id}/pdf`).catch((e) => toast(e.message, 'err'));
   const show = async (saleId: string) => {
     try { setOpen(await boApi(`/sales/${saleId}`)); } catch (e: any) { toast(e.message, 'err'); }
   };
   const counts = data?.counts || {};
   const cols = [
     { key: 'doc_type', label: 'Tipo' }, { key: 'consecutivo', label: 'Consecutivo' }, { key: 'clave', label: 'Clave' }, { key: 'issued_at', label: 'Fecha' },
-    { key: 'receipt_no', label: 'Recibo' }, { key: 'status', label: 'Estado' }, { key: 'total', label: 'Total' }, { key: 'message', label: 'Mensaje' },
+    { key: 'receipt_no', label: 'Recibo' }, { key: 'external_ref', label: 'Cloudbeds' }, { key: 'source', label: 'Origen' }, { key: 'status', label: 'Estado' }, { key: 'currency', label: 'Moneda' }, { key: 'total', label: 'Total' }, { key: 'message', label: 'Mensaje' },
   ];
 
   return (
@@ -80,13 +105,13 @@ function Documents() {
           <option value="">Todos los tipos</option>
           {Object.entries(EDOC_NAMES).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        <SearchInput value={q} onChange={setQ} placeholder="Clave, consecutivo, recibo, cliente o cédula" className="max-w-sm flex-1" />
+        <SearchInput value={q} onChange={setQ} placeholder="Clave, consecutivo, recibo, reservación, cliente o cédula" className="max-w-sm flex-1" />
         <ExportButtons name="comprobantes-hacienda" rows={(data?.rows || []).map((d) => ({ ...d, doc_type: EDOC_NAMES[d.doc_type] }))} cols={cols} />
       </div>
       <div className="card overflow-x-auto">
         {loading && !data ? <div className="flex justify-center py-10"><Spinner /></div> : !data?.rows.length ? <Empty>No hay comprobantes en este período</Empty> : (
           <table className="table">
-            <thead><tr><th>Comprobante</th><th>Fecha</th><th>Recibo</th><th>Receptor</th><th>Estado</th><th className="text-right">Total</th><th /></tr></thead>
+            <thead><tr><th>Comprobante</th><th>Fecha</th><th>Origen</th><th>Receptor</th><th>Estado</th><th className="text-right">Total</th><th /></tr></thead>
             <tbody>
               {data.rows.map((d) => (
                 <tr key={d.id} className={d.replaced_by ? 'opacity-60' : ''}>
@@ -96,16 +121,23 @@ function Documents() {
                     {d.reference?.clave && <div className="text-xs text-slate-400">Ref. {fmtConsecutivo(d.reference.clave.slice(21, 41))}</div>}
                   </td>
                   <td className="whitespace-nowrap">{dt(d.issued_at)}</td>
-                  <td><button className="text-brand-700 hover:underline" onClick={() => show(d.sale_id)}>#{d.receipt_no}</button></td>
+                  <td>{d.sale_id ? <button className="text-brand-700 hover:underline" onClick={() => show(d.sale_id)}>POS #{d.receipt_no}</button>
+                    : d.source === 'cloudbeds' ? <span className="text-xs">Cloudbeds<div className="text-slate-500">{d.external_ref}</div></span>
+                    : <span className="text-xs">Manual</span>}</td>
                   <td className="text-sm">{d.receptor?.nombre ? <>{d.receptor.nombre}<div className="text-xs text-slate-500">{d.receptor.id_number}</div></> : <span className="text-slate-400">—</span>}</td>
                   <td>
                     <EDocStatus status={d.status} />
                     {d.replaced_by && <div className="text-xs text-slate-500">sustituido</div>}
+                    {d.annulled_by && <div className="text-xs text-slate-500">anulado</div>}
                     {d.message && d.status !== 'accepted' && <div className="mt-0.5 max-w-xs text-xs text-rose-600">{d.message}</div>}
                     {d.receptor?.email && d.status === 'accepted' && <div className="text-xs text-slate-500">{d.emailed_at ? 'Correo enviado' : d.email_error ? `Correo: ${d.email_error}` : ''}</div>}
                   </td>
-                  <td className="text-right tabular-nums">{d.total != null ? money(d.total) : '—'}</td>
+                  <td className="text-right tabular-nums">{d.total != null ? (d.currency === 'USD' ? fmtCur(d.total, 'USD') : money(d.total)) : '—'}{d.currency === 'USD' && <div className="text-xs text-slate-400">T/C {Number(d.exchange_rate).toFixed(2)}</div>}</td>
                   <td className="whitespace-nowrap text-right">
+                    <button className="btn-secondary px-2 py-1 text-xs" onClick={() => pdf(d)} title="Ver PDF"><FileText size={12} />PDF</button>
+                    {d.source !== 'pos' && d.doc_type !== '03' && !d.annulled_by && !d.replaced_by && d.status !== 'rejected' && can('settings.manage') && (
+                      <button className="btn-secondary ml-1 px-2 py-1 text-xs text-rose-600" disabled={!!busy} onClick={() => annul(d)}><Ban size={12} />Anular</button>
+                    )}
                     {(d.status === 'error' || d.status === 'pending') && !d.replaced_by && (
                       <button className="btn-secondary px-2 py-1 text-xs" disabled={!!busy} onClick={() => act(d, 'retry')}><RefreshCw size={12} />Reintentar</button>
                     )}
@@ -137,6 +169,7 @@ function Config() {
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState('');
   const [test, setTest] = useState<any>(null);
+  const [imapPassword, setImapPassword] = useState('');
   useEffect(() => { boApi('/hacienda/settings').then(setS).catch((e) => toast(e.message, 'err')); }, []);
   if (!s) return <div className="flex justify-center py-10"><Spinner /></div>;
   const set = (k: string) => (e: any) => setS({ ...s, [k]: e.target.value });
@@ -155,12 +188,16 @@ function Config() {
       setBusy('');
     }
   };
-  const FIELDS = ['environment', 'legal_name', 'trade_name', 'id_type', 'id_number', 'activity_code', 'provider_id', 'provincia', 'canton', 'distrito', 'barrio', 'otras_senas', 'phone', 'email', 'default_cabys', 'resolution_text', 'api_username'];
+  const FIELDS = ['environment', 'legal_name', 'trade_name', 'id_type', 'id_number', 'activity_code', 'provider_id', 'provincia', 'canton', 'distrito', 'barrio', 'otras_senas', 'phone', 'email', 'default_cabys', 'resolution_text', 'api_username',
+    'terminal', 'usd_rate_manual', 'imap_host', 'imap_port', 'imap_user', 'expense_category'];
   const save = () => run('save', async () => {
     const body: any = Object.fromEntries(FIELDS.map((f) => [f, s[f] ?? '']));
+    body.auto_accept = !!s.auto_accept;
     if (password) body.api_password = password;
+    if (imapPassword) body.imap_password = imapPassword;
     const r = await boApi('/hacienda/settings', { method: 'PUT', body });
     setPassword('');
+    setImapPassword('');
     return r;
   }, 'Configuración guardada');
   const uploadCert = () => run('cert', async () => {
@@ -268,11 +305,69 @@ function Config() {
 
         <div className="card space-y-3 p-5">
           <div className="font-semibold">Comprobantes</div>
-          <Field label="CABYS por defecto" hint="Se usa cuando el producto y su categoría no tienen CABYS (13 dígitos)"><input className="input" maxLength={13} value={s.default_cabys || ''} onChange={set('default_cabys')} /></Field>
+          <Field label="CABYS por defecto" hint="Se usa cuando el producto y su categoría no tienen CABYS (13 dígitos)"><CabysPicker value={s.default_cabys || ''} onChange={(v) => setS({ ...s, default_cabys: v })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Terminal" hint="5 dígitos del consecutivo. Use una distinta a la de Cubo u otro sistema."><input className="input" inputMode="numeric" maxLength={5} value={s.terminal || ''} onChange={set('terminal')} /></Field>
+            <Field label="Tipo de cambio fijo (₡ por US$)" hint="Vacío = tipo de cambio diario de Hacienda/BCCR"><input className="input" inputMode="decimal" value={s.usd_rate_manual || ''} onChange={set('usd_rate_manual')} /></Field>
+          </div>
           <Field label="Leyenda en el tiquete"><input className="input" value={s.resolution_text || ''} onChange={set('resolution_text')} /></Field>
         </div>
+        <div className="card space-y-3 p-5">
+          <div className="font-semibold">Facturas de proveedores (buzón de correo)</div>
+          <p className="text-xs text-slate-500">Los proveedores envían sus facturas electrónicas a este correo. El sistema lo revisa cada 10 minutos, importa los XML y (si lo activa) los acepta ante Hacienda automáticamente.</p>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Servidor IMAP" className="col-span-2"><input className="input" value={s.imap_host || ''} onChange={set('imap_host')} placeholder="imap.gmail.com" /></Field>
+            <Field label="Puerto"><input className="input" inputMode="numeric" value={s.imap_port || ''} onChange={set('imap_port')} placeholder="993" /></Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Usuario / correo"><input className="input" value={s.imap_user || ''} onChange={set('imap_user')} placeholder="facturas@…" /></Field>
+            <Field label="Contraseña" hint={s.has_imap_password ? 'Guardada (cifrada)' : 'Gmail: use una "contraseña de aplicación"'}>
+              <input className="input" type="password" autoComplete="new-password" value={imapPassword} onChange={(e) => setImapPassword(e.target.value)} placeholder={s.has_imap_password ? '••••••••' : ''} />
+            </Field>
+          </div>
+          {s.imap_error && <div className="text-xs text-rose-600">Último error: {s.imap_error}</div>}
+          <Field label="Categoría de gasto predeterminada"><input className="input" value={s.expense_category || ''} onChange={set('expense_category')} placeholder="Compras" /></Field>
+          <Toggle checked={!!s.auto_accept} onChange={(v) => setS({ ...s, auto_accept: v })} label="Aceptar automáticamente ante Hacienda las facturas recibidas" />
+        </div>
+        <Sequences />
         <button className="btn-primary w-full" disabled={busy === 'save'} onClick={save}>Guardar configuración</button>
       </div>
+    </div>
+  );
+}
+
+/** Consecutive numbers per terminal and document type; lets the hotel continue after the numbers used in Cubo. */
+function Sequences() {
+  const toast = useToast();
+  const { data, reload } = useAsync(() => boApi<any[]>('/hacienda/sequences'), []);
+  const [f, setF] = useState({ branch: '001', terminal: '', doc_type: '04', next: '' });
+  const NAMES: Record<string, string> = { '01': 'Factura', '03': 'Nota de crédito', '04': 'Tiquete', '05': 'Aceptación', '06': 'Aceptación parcial', '07': 'Rechazo' };
+  const save = async () => {
+    try {
+      await boApi('/hacienda/sequences', { method: 'PUT', body: { ...f, next: Number(f.next) } });
+      toast('Numeración actualizada');
+      setF({ ...f, next: '' });
+      reload();
+    } catch (e: any) {
+      toast(e.message, 'err');
+    }
+  };
+  return (
+    <div className="card space-y-3 p-5">
+      <div className="font-semibold">Numeración (consecutivos)</div>
+      {data?.length ? (
+        <table className="table text-sm">
+          <thead><tr><th>Sucursal</th><th>Terminal</th><th>Tipo</th><th className="text-right">Último</th></tr></thead>
+          <tbody>{data.map((r) => <tr key={r.branch + r.terminal + r.doc_type}><td>{r.branch}</td><td>{r.terminal}</td><td>{NAMES[r.doc_type] || r.doc_type}</td><td className="text-right tabular-nums">{r.last}</td></tr>)}</tbody>
+        </table>
+      ) : <div className="text-xs text-slate-500">Aún no se han emitido documentos en este ambiente.</div>}
+      <div className="grid grid-cols-4 gap-2">
+        <Field label="Sucursal"><input className="input" value={f.branch} onChange={(e) => setF({ ...f, branch: e.target.value })} /></Field>
+        <Field label="Terminal"><input className="input" value={f.terminal} onChange={(e) => setF({ ...f, terminal: e.target.value })} placeholder="actual" /></Field>
+        <Field label="Tipo"><select className="input" value={f.doc_type} onChange={(e) => setF({ ...f, doc_type: e.target.value })}>{Object.entries(NAMES).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+        <Field label="Siguiente N°"><input className="input" inputMode="numeric" value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} /></Field>
+      </div>
+      <button className="btn-secondary w-full" disabled={!f.next} onClick={save}>Fijar siguiente número</button>
     </div>
   );
 }

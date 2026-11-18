@@ -56,6 +56,7 @@ export type SendBody = {
   fecha: string;
   emisor: { tipoIdentificacion: string; numeroIdentificacion: string };
   receptor?: { tipoIdentificacion: string; numeroIdentificacion: string };
+  consecutivoReceptor?: string; // Mensaje Receptor only
   comprobanteXml: string; // base64 of the signed XML
 };
 

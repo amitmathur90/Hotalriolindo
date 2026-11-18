@@ -5,6 +5,7 @@ import { money } from '../../lib/format';
 import { parseCSV } from '../../lib/csv';
 import { imageToDataUrl } from '../../lib/misc';
 import { Badge, Empty, Field, Modal, PageHeader, SearchInput, Spinner, Tabs, Toggle, useAsync, useToast } from '../../components/ui';
+import { CabysPicker } from '../../components/CabysPicker';
 import { useSession } from '../BackOffice';
 import { CrudPage, ExportButtons } from '../widgets';
 
@@ -167,7 +168,7 @@ function ProductEditor({ product, meta, onClose, onSaved }: { product: any; meta
           </Field>
           <Field label="Unit"><select className="input" value={p.unit} onChange={(e) => set('unit', e.target.value)}>{['pcs', 'kg', 'g', 'l', 'ml', 'm', 'box', 'pack'].map((u) => <option key={u}>{u}</option>)}</select></Field>
           <Field label="Description"><input className="input" value={p.description || ''} onChange={(e) => set('description', e.target.value)} /></Field>
-          <Field label="CABYS (Hacienda)" hint="13 dígitos. Vacío = usa el de la categoría o el predeterminado"><input className="input" inputMode="numeric" maxLength={13} value={p.cabys || ''} onChange={(e) => set('cabys', e.target.value.replace(/\D/g, ''))} /></Field>
+          <Field label="CABYS (Hacienda)" hint="13 dígitos. Vacío = usa el de la categoría o el predeterminado"><CabysPicker value={p.cabys || ''} onChange={(v) => set('cabys', v)} /></Field>
           <div className="flex flex-wrap gap-4 sm:col-span-2">
             <Toggle checked={p.track_stock} onChange={(v) => set('track_stock', v)} label="Track stock" />
             <Toggle checked={p.is_favorite} onChange={(v) => set('is_favorite', v)} label="Favorite on POS" />

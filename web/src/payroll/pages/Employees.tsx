@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Upload } from 'lucide-react';
+import { Plus, Store, Upload } from 'lucide-react';
 import { money, dateOnly } from '../../lib/format';
 import { parseCSV } from '../../lib/csv';
 import { Badge, Empty, Field, Modal, PageHeader, SearchInput, Spinner, Toggle, useAsync, useToast } from '../../components/ui';
 import { useSession } from '../../backoffice/BackOffice';
 import { ExportButtons } from '../../backoffice/widgets';
 import { errMsg, pr, today } from '../lib';
+import PosStaff from './PosStaff';
 
 export const STATUS_BADGE: Record<string, JSX.Element> = { active: <Badge color="green">Active</Badge>, inactive: <Badge>Inactive</Badge>, suspended: <Badge color="red">Suspended</Badge> };
 
@@ -20,12 +21,14 @@ export default function Employees() {
   const depts = useAsync(() => pr<any[]>('/departments'), []);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [posStaff, setPosStaff] = useState(false);
   const rows = (data || []).filter((e) => !q || `${e.full_name} ${e.short_name || ''} ${e.cedula || ''} ${e.code} ${e.email || ''}`.toLowerCase().includes(q.toLowerCase()));
   const pay = rows.some((r) => !r.pay_hidden);
 
   return (
     <div>
       <PageHeader title="Employees" subtitle={`${rows.length} employee(s)`} actions={can('payroll.employees') && <>
+        <button className="btn-secondary" onClick={() => setPosStaff(true)}><Store size={16} />POS staff</button>
         <button className="btn-secondary" onClick={() => setImporting(true)}><Upload size={16} />Import</button>
         <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} />Add employee</button>
       </>} />
@@ -44,7 +47,7 @@ export default function Employees() {
             <thead><tr><th>Employee</th><th>Cédula</th><th>Department / position</th><th>Type</th>{pay && <th className="text-right">Salary / rate</th>}<th>Payment</th><th>Insurance</th><th>Joined</th><th>Status</th></tr></thead>
             <tbody>{rows.map((e) => (
               <tr key={e.id} className="cursor-pointer" onClick={() => nav(`/backoffice/payroll/employees/${e.id}`)}>
-                <td><Link to={`/backoffice/payroll/employees/${e.id}`} className="font-medium hover:underline">{e.full_name}</Link><div className="text-xs text-slate-400">{e.code}{e.short_name ? ` · "${e.short_name}"` : ''}</div></td>
+                <td><Link to={`/backoffice/payroll/employees/${e.id}`} className="font-medium hover:underline">{e.full_name}</Link><div className="text-xs text-slate-400">{e.code}{e.short_name ? ` · "${e.short_name}"` : ''}{e.user_id && <span className="ml-1.5 rounded bg-brand-50 px-1 text-[10px] font-semibold text-brand-700 dark:bg-brand-900/30 dark:text-brand-300" title={`Linked to POS user ${e.user_name || ''}`}>POS</span>}</div></td>
                 <td className="font-mono text-xs">{e.cedula || <span className="text-amber-600">missing</span>}</td>
                 <td>{e.department_name || '—'}<div className="text-xs text-slate-400">{e.position_name}</div></td>
                 <td className="capitalize">{e.employment_type}</td>
@@ -60,6 +63,7 @@ export default function Employees() {
       </div>
       {creating && <EmployeeForm onClose={() => setCreating(false)} onSaved={(id) => { setCreating(false); nav(`/backoffice/payroll/employees/${id}`); }} />}
       {importing && <ImportEmployees onClose={() => { setImporting(false); reload(); }} />}
+      {posStaff && <PosStaff onClose={() => { setPosStaff(false); reload(); }} />}
     </div>
   );
 }

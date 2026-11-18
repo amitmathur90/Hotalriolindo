@@ -20,6 +20,9 @@ export type BuildInput = {
   lines: DocLine[]; serviceCharge: number; servicePct: number; tip: number;
   payments: { type: string; name: string; amount: number }[];
   references?: DocReference[];
+  currency?: 'CRC' | 'USD'; exchangeRate?: number;   // amounts are in the document currency; TipoCambio = colones per unit
+  condition?: string; creditDays?: number | null;    // CondicionVenta 01 contado | 02 crédito …
+  notes?: string | null;                             // printed in "Otros / OtroTexto"
 };
 
 const r5 = (n: number) => Math.round((n + Number.EPSILON) * 1e5) / 1e5;
@@ -151,7 +154,7 @@ export function buildXml(d: BuildInput): { xml: string; total: number } {
 
   const resumen =
     '<ResumenFactura>' +
-    '<CodigoTipoMoneda>' + el('CodigoMoneda', 'CRC') + el('TipoCambio', m(1)) + '</CodigoTipoMoneda>' +
+    '<CodigoTipoMoneda>' + el('CodigoMoneda', d.currency || 'CRC') + el('TipoCambio', m(d.currency === 'USD' ? Number(d.exchangeRate) || 1 : 1)) + '</CodigoTipoMoneda>' +
     el('TotalServGravados', m(t.servG)) + el('TotalServExentos', m(t.servE)) +
     el('TotalMercanciasGravadas', m(t.mercG)) + el('TotalMercanciasExentas', m(t.mercE)) +
     el('TotalGravado', m(totalGravado)) + el('TotalExento', m(totalExento)) +
@@ -175,8 +178,10 @@ export function buildXml(d: BuildInput): { xml: string; total: number } {
     el('Clave', d.clave) + el('ProveedorSistemas', idNumber('01', d.providerId).slice(0, 20)) + el('CodigoActividadEmisor', digits(d.activityCode).padStart(6, '0')) +
     (d.docType === '01' && rc?.activity_code && digits(rc.activity_code).length === 6 ? el('CodigoActividadReceptor', digits(rc.activity_code)) : '') +
     el('NumeroConsecutivo', d.consecutivo) + el('FechaEmision', crDateTime(d.fecha)) +
-    emisor + receptor + el('CondicionVenta', '01') +
+    emisor + receptor + el('CondicionVenta', d.condition || '01') +
+    ((d.condition === '02' || d.condition === '10') && Number(d.creditDays) > 0 ? el('PlazoCredito', Math.round(Number(d.creditDays))) : '') +
     '<DetalleServicio>' + lines.join('') + '</DetalleServicio>' + otros + resumen + refs +
+    (d.notes && d.notes.trim() ? '<Otros>' + el('OtroTexto', d.notes.replace(/\s+/g, ' ').trim().slice(0, 500)) + '</Otros>' : '') +
     `</${root}>`;
   return { xml, total: totalComprobante };
 }

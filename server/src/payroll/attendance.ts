@@ -177,6 +177,14 @@ r.get('/attendance/summary', ah(async (req, res) => {
 r.post('/attendance/from-timeclock', requirePerm('payroll.process', 'payroll.attendance'), ah(async (req, res) => {
   const from = isoDate(req.body?.from), to = isoDate(req.body?.to);
   assertDateRange(from, to);
+  res.json(await importTimeclock(req, from!, to!));
+}));
+
+/**
+ * Copies POS time-clock days into payroll attendance (source "timeclock") for employees linked to a POS user.
+ * Manual or imported entries are never overwritten; days in closed payroll periods are skipped.
+ */
+export async function importTimeclock(req: Request, from: string, to: string) {
   const tz = (await db.one(`SELECT timezone FROM businesses WHERE id=$1`, [bid(req)]))?.timezone || 'America/Costa_Rica';
   const rows = await db.query(
     `SELECT e.id AS employee_id, (t.clock_in AT TIME ZONE $4)::date AS work_date,
@@ -189,22 +197,22 @@ r.post('/attendance/from-timeclock', requirePerm('payroll.process', 'payroll.att
   );
   let saved = 0;
   const errors: string[] = [];
-  await tx(async (q) => {
-    for (const x of rows) {
-      const existing = await q.one(`SELECT source FROM pr_attendance WHERE employee_id=$1 AND work_date=$2`, [x.employee_id, x.work_date]);
-      if (existing && existing.source !== 'timeclock') continue; // never overwrite manual entries
-      try {
-        await upsert(q, req, x.employee_id, {
-          work_date: x.work_date, check_in: String(x.check_in).slice(0, 5), check_out: String(x.check_out).slice(0, 5),
-          regular_hours: Math.round(Number(x.hours) * 100) / 100,
-        }, 'timeclock');
-        saved++;
-      } catch (e: any) {
-        errors.push(e.message);
-      }
+  for (const x of rows) {
+    try {
+      const done = await tx(async (q) => {
+        const existing = await q.one(`SELECT source, regular_hours, check_in, check_out FROM pr_attendance WHERE employee_id=$1 AND work_date=$2`, [x.employee_id, x.work_date]);
+        if (existing && existing.source !== 'timeclock') return false; // never overwrite manual entries
+        const a = { work_date: x.work_date, check_in: String(x.check_in).slice(0, 5), check_out: String(x.check_out).slice(0, 5), regular_hours: Math.round(Number(x.hours) * 100) / 100 };
+        if (existing && Number(existing.regular_hours) === a.regular_hours && String(existing.check_in).slice(0, 5) === a.check_in && String(existing.check_out).slice(0, 5) === a.check_out) return false;
+        await upsert(q, req, x.employee_id, a, 'timeclock');
+        return true;
+      });
+      if (done) saved++;
+    } catch (e: any) {
+      errors.push(e.message);
     }
-  });
-  res.json({ saved, found: rows.length, errors });
-}));
+  }
+  return { saved, found: rows.length, errors };
+}
 
 export default r;

@@ -59,6 +59,10 @@ npx tsx server/scripts/hacienda-mock.ts 4199               # local stand-in for 
 PORT=4100 PGLITE_DIR=./data/test-hk HACIENDA_IDP_URL=http://localhost:4199/token \
   HACIENDA_API_URL=http://localhost:4199/recepcion/v1/ HACIENDA_POLL_MS=1000 HACIENDA_RETRY_BASE_S=1 npm start -w server
 node server/scripts/hacienda-e2e.mjs http://localhost:4100 http://localhost:4199   # 43 checks
+# Cubo replacement (manual invoices, USD, supplier invoices, Cloudbeds, QuickBooks): also set
+#   HACIENDA_TC_URL=…/tc HACIENDA_CABYS_URL=…/cabys CLOUDBEDS_API_URL=…/cloudbeds QB_AUTH_URL=…/qb/auth QB_TOKEN_URL=…/qb/token
+#   QB_API_URL=…/qb JWT_SECRET=e2e-secret QB_CLOSE_DAY_OFFSET=0   (all on http://localhost:4199)
+node server/scripts/cubo-e2e.mjs http://localhost:4100 http://localhost:4199       # 61 checks
 ```
 
 ## Single hotel mode
@@ -74,7 +78,16 @@ Back Office → **Hacienda**.
 * **Refunds** issue a *nota de crédito electrónica* (03) that references the original tiquete/factura (code 01 for a full refund, 06 for a partial return).
 * A background queue signs each document (XAdES-EPES with the *llave criptográfica*), sends it to Hacienda's *API de Recepción*, and checks the result. Network failures are retried with back-off, so the POS never waits for Hacienda. Offline sales are issued with *situación 3* when they sync.
 * Rejected documents and errors appear in Hacienda → Comprobantes, with Hacienda's message, and as a notification. *Reintentar* resends a document after a fix (e.g. a missing CABYS code). *Reemitir* issues a new document with a new clave.
-* Accepted facturas are e-mailed to the customer with the XML and Hacienda's response when SMTP is configured (see `server/.env.example`).
+* Accepted facturas are e-mailed to the customer with the PDF, the XML and Hacienda's response when SMTP is configured (see `server/.env.example`).
+* **PDF** of every document (Emitidos → PDF, receipt → PDF): emisor/receptor, lines, otros cargos, totals with the amount in words, notes, legal text and a QR code that opens the public PDF (`APP_URL` / Render's URL).
+* **Nueva factura**: manual factura or tiquete for rooms, events, tours and services outside the POS, in **colones or dollars** (Hacienda/BCCR daily exchange rate, or a fixed rate in settings), cash or credit with a term, notes. *Anular* issues the full nota de crédito.
+* **Recibidos (proveedores)**: supplier XMLs arrive by upload or from the invoices mailbox (IMAP, checked every 10 minutes). *Responder* sends the signed **Mensaje Receptor** (aceptado / parcial / rechazado) and records accepted invoices as expenses (optionally automatically).
+* **Numeración**: set the terminal and the next number per document type, so numbering continues after the one used in Cubo without collisions.
+* **CABYS search** (Hacienda catalogue) next to every CABYS field.
+
+**Integrations** (Back Office → Integrations):
+* **Cloudbeds**: API key + lodging CABYS. Each checked-out reservation becomes a factura (guest/company with a Costa Rican cédula in Cloudbeds) or a tiquete, in the property currency; totals that don't match Cloudbeds are held for review.
+* **QuickBooks Online**: Intuit app Client ID/Secret → *Conectar* (register the shown redirect URI in the Intuit app) → map accounts. Each closed day is posted as a balanced journal entry from the documents Hacienda accepted; accepted supplier invoices are posted as bills (expense + IVA credit).
 
 **Setup:** enter the emisor details (razón social, cédula, actividad económica, provincia/cantón/distrito, e-mail), the ATV API user and password, and upload the `.p12` key with its PIN. Use *Probar conexión y firma*, then activate in **Pruebas** (sandbox) first. Switch to **Producción** only after documents are accepted in sandbox. Each product needs a 13-digit **CABYS** code, set on the product, its category, or as the default. The secrets are stored encrypted with a key derived from `JWT_SECRET`.
 
