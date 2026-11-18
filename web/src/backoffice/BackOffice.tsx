@@ -2,7 +2,7 @@ import { createContext, lazy, Suspense, useContext, useEffect, useState } from '
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BarChart3, Receipt, Package, Boxes, Truck, Users, UserCog, Wallet, Settings, ShieldCheck, Building2,
-  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X, Landmark, Plug, BadgeDollarSign, ArrowLeft,
+  Bell, Moon, Sun, LogOut, Store as StoreIcon, Menu, X, Landmark, Plug, Calculator, BadgeDollarSign, ArrowLeft,
 } from 'lucide-react';
 import { PAYROLL_NAV } from '../payroll/nav';
 import { bo, boApi } from '../lib/api';
@@ -23,6 +23,7 @@ const SettingsPage = lazy(() => import('./pages/Settings'));
 const Audit = lazy(() => import('./pages/Audit'));
 const Hacienda = lazy(() => import('./pages/Hacienda'));
 const Integrations = lazy(() => import('./pages/Integrations'));
+const Accounting = lazy(() => import('./pages/Accounting'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Payroll = lazy(() => import('../payroll/Payroll'));
 
@@ -50,6 +51,7 @@ const NAV = [
   { to: 'employees', label: 'Employees', icon: UserCog, perm: 'employees.manage' },
   { to: 'cash', label: 'Shifts & Cash', icon: Wallet, perm: 'reports.view' },
   { to: 'hacienda', label: 'Hacienda', icon: Landmark, perm: 'reports.view' },
+  { to: 'accounting', label: 'Accounting', icon: Calculator, perm: 'accounting.view' },
   { to: 'integrations', label: 'Integrations', icon: Plug, perm: 'settings.manage' },
   { to: 'settings', label: 'Settings', icon: Settings, perm: 'settings.manage' },
   { to: 'audit', label: 'Audit log', icon: ShieldCheck, perm: 'audit.view' },
@@ -196,6 +198,7 @@ export default function BackOffice() {
                 <Route path="audit" element={<Audit />} />
                 <Route path="hacienda" element={<Hacienda />} />
                 <Route path="integrations" element={<Integrations />} />
+                <Route path="accounting" element={<Accounting />} />
                 <Route path="admin" element={<Admin />} />
                 <Route path="payroll/*" element={<Payroll />} />
                 <Route path="*" element={<Navigate to={home} replace />} />

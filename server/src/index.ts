@@ -22,6 +22,8 @@ import { startHaciendaWorker } from './hacienda/service.ts';
 import { documentPdf } from './hacienda/pdf.ts';
 import integrationRoutes, { quickbooksCallback } from './routes/integrations.ts';
 import { startIntegrationWorker } from './integrations/worker.ts';
+import accountingRoutes from './routes/accounting.ts';
+import { startAccountingWorker } from './accounting/engine.ts';
 import payrollRoutes, { startPayrollWorker } from './payroll/index.ts';
 import { db } from './db.ts';
 import { APP_NAME, MULTI_TENANT } from './config.ts';
@@ -82,6 +84,7 @@ app.use('/api/settings', authenticate, settingsRoutes);
 app.use('/api/hacienda', authenticate, haciendaRoutes);
 app.use('/api/payroll', authenticate, payrollRoutes);
 app.use('/api/integrations', authenticate, integrationRoutes);
+app.use('/api/accounting', authenticate, accountingRoutes);
 app.use('/api', authenticate, catalogRoutes, salesRoutes, inventoryRoutes, peopleRoutes);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -118,6 +121,8 @@ startHaciendaWorker();
 startPayrollWorker();
 // Supplier invoices (mailbox + Mensaje Receptor), Cloudbeds check-outs, QuickBooks postings
 startIntegrationWorker();
+// Accounting: automatic journal entries from sales, invoices, supplier bills, expenses and payroll
+startAccountingWorker();
 
 // Daily housekeeping: loyalty point expiry
 setInterval(() => expirePoints().catch(console.error), 24 * 3600 * 1000);

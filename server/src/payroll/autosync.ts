@@ -121,7 +121,7 @@ function run(businessId: string) {
 }
 
 /** Called by payroll pages: makes sure data is at most `maxAgeMs` old before answering. */
-export async function ensureFresh(businessId: string, maxAgeMs = 60_000) {
+export async function ensureFresh(businessId: string, maxAgeMs = Number(process.env.PAYROLL_FRESH_MS || 60_000)) {
   if (Date.now() - (lastRun.get(businessId) || 0) > maxAgeMs) await run(businessId);
 }
 

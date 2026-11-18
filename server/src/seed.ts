@@ -14,7 +14,7 @@ export const DEFAULT_ROLES: Record<string, string[]> = {
   Cashier: ['pos.sell', 'pos.reprint', 'shift.manage', 'customers.manage'],
   'Inventory Manager': ['backoffice.access', 'inventory.manage', 'purchases.manage', 'products.manage'],
   'Kitchen Staff': ['kitchen.view'],
-  Accountant: ['backoffice.access', 'reports.view', 'audit.view'],
+  Accountant: ['backoffice.access', 'reports.view', 'audit.view', 'accounting.view', 'accounting.manage'],
 };
 
 export interface NewBusiness {

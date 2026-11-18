@@ -89,6 +89,14 @@ Back Office → **Hacienda**.
 * **Cloudbeds**: API key + lodging CABYS. Each checked-out reservation becomes a factura (guest/company with a Costa Rican cédula in Cloudbeds) or a tiquete, in the property currency; totals that don't match Cloudbeds are held for review.
 * **QuickBooks Online**: Intuit app Client ID/Secret → *Conectar* (register the shown redirect URI in the Intuit app) → map accounts. Each closed day is posted as a balanced journal entry from the documents Hacienda accepted; accepted supplier invoices are posted as bills (expense + IVA credit).
 
+**Accounting** (Back Office → Accounting; permissions `accounting.view` / `accounting.manage`, given to the Accountant role) — the built-in alternative to QuickBooks:
+* Costa Rican chart of accounts (editable). Journal entries are created automatically every 5 minutes, one per source: POS sales and refunds (payment method → cash / card clearing / bank, IVA, 10 % service, tips, cost of sales), manual and Cloudbeds invoices (credit invoices open a receivable), supplier invoices accepted in Hacienda → Recibidos (expense by category, IVA credit, payable with the XML's plazo), hand-entered expenses, approved payroll periods (salaries, employer CCSS %, net pay, CCSS, vales) and payroll payments. When a source changes (rejected, voided, payroll reopened) its entry is reversed and re-posted; the ledger is never edited in place.
+* Receivables / payables with payments in CRC or USD (exchange difference booked automatically), ageing and opening balances.
+* Banks: import the bank's CSV statement, automatic matching (same amount ±5 days), manual matching, and entries for fees or interest from a statement line.
+* Reports: P&L (monthly columns), balance sheet, trial balance, general ledger, cash flow (direct method), IVA summary for the D-104. All exportable (CSV / Excel / PDF).
+* Closing: monthly lock, USD revaluation with automatic reversal, year-end close to retained earnings.
+* Tests: `node server/scripts/accounting-e2e.mjs http://localhost:4100` (46 checks; same env as the Cubo tests).
+
 **Setup:** enter the emisor details (razón social, cédula, actividad económica, provincia/cantón/distrito, e-mail), the ATV API user and password, and upload the `.p12` key with its PIN. Use *Probar conexión y firma*, then activate in **Pruebas** (sandbox) first. Switch to **Producción** only after documents are accepted in sandbox. Each product needs a 13-digit **CABYS** code, set on the product, its category, or as the default. The secrets are stored encrypted with a key derived from `JWT_SECRET`.
 
 ## Payroll Management System

@@ -67,6 +67,7 @@ export async function initDb() {
   const schema = readFileSync(fileURLToPath(new URL('./schema.sql', import.meta.url)), 'utf8');
   await impl.exec(schema);
   await impl.exec(readFileSync(fileURLToPath(new URL('./payroll/schema.sql', import.meta.url)), 'utf8'));
+  await impl.exec(readFileSync(fileURLToPath(new URL('./accounting/schema.sql', import.meta.url)), 'utf8'));
   return impl.kind;
 }
 

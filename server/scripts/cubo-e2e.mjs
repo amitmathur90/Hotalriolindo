@@ -165,7 +165,7 @@ const rej = await api('POST', `/hacienda/received/${r2.id}/decide`, { decision: 
 ok(rej.status === 200 && /^0010000707/.test(rej.data.mr_consecutivo), 'rejected: mensaje receptor type 07');
 rec = await waitFor(async () => (await api('GET', '/hacienda/received', null, O)).data, (x) => x.rows.every((r) => r.mr_status === 'accepted'));
 ok(rec.rows.every((r) => r.mr_status === 'accepted'), 'Hacienda accepted both mensajes receptor', rec.rows.map((r) => [r.mr_status, r.mr_message]));
-const sent = (await (await fetch(MOCK + '/_received')).json()).filter((x) => x.consecutivoReceptor);
+const sent = (await (await fetch(MOCK + '/_received')).json()).filter((x) => x.consecutivoReceptor && [r1.clave, r2.clave].some((k) => x.clave.startsWith(k)));
 ok(sent.length === 2 && sent.every((x) => x.signatureValid && x.receptor?.numeroIdentificacion === '3101123456'), 'mensajes were signed and sent with clave + consecutivoReceptor', sent);
 const exp = (await api('GET', '/expenses', null, O)).data;
 const expRows = Array.isArray(exp) ? exp : exp.rows || [];

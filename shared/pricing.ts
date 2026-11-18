@@ -225,6 +225,9 @@ export const PERMISSIONS: Record<string, string> = {
   'payroll.reports': 'Payroll reports, revenue & reconciliation',
   'payroll.settings': 'Payroll settings, departments & holidays',
   'payroll.self': 'View own payslips (employee self-service)',
+  // Accounting (contabilidad)
+  'accounting.view': 'View accounting: ledger, financial statements, receivables & payables',
+  'accounting.manage': 'Post entries, record payments, banks, close periods',
 };
 
 /** Payroll roles added to every business (PRD §3). Owners have every permission. */
