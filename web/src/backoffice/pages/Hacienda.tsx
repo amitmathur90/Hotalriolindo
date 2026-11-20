@@ -121,7 +121,7 @@ function Documents() {
               {data.rows.map((d) => (
                 <tr key={d.id} className={d.replaced_by ? 'opacity-60' : ''}>
                   <td>
-                    <button className="text-left font-medium hover:underline" onClick={() => setDetail(d.id)}>{EDOC_NAMES[d.doc_type]}{d.environment === 'stag' && <span className="ml-1 text-xs text-amber-600">pruebas</span>}</button>
+                    <button className="text-left font-medium hover:underline" onClick={() => setDetail(d.id)}>{EDOC_NAMES[d.doc_type]}{d.environment === 'stag' && <span className="ml-1 text-xs text-amber-600">pruebas</span>}{d.environment === 'sim' && <span className="ml-1 text-xs text-rose-600">simulación</span>}</button>
                     <div className="font-mono text-xs text-slate-500">{fmtConsecutivo(d.consecutivo)}</div>
                     {d.reference?.clave && <div className="text-xs text-slate-400">Ref. {fmtConsecutivo(d.reference.clave.slice(21, 41))}</div>}
                   </td>
@@ -230,11 +230,11 @@ function Config() {
           <div>
             <div className="font-semibold">Estado</div>
             <div className="text-sm text-slate-500">
-              {s.enabled ? <>Activa en <b>{s.environment === 'prod' ? 'PRODUCCIÓN' : 'PRUEBAS (sandbox)'}</b> — cada venta emite un comprobante electrónico.</> : 'Desactivada — las ventas no envían comprobantes a Hacienda.'}
+              {s.enabled ? (s.environment === 'sim' ? <>Activa en <b>SIMULACIÓN</b> — cada venta genera un comprobante de prueba que <b>no se envía a Hacienda</b> y no tiene validez fiscal.</> : <>Activa en <b>{s.environment === 'prod' ? 'PRODUCCIÓN' : 'PRUEBAS (sandbox)'}</b> — cada venta emite un comprobante electrónico.</>) : 'Desactivada — las ventas no envían comprobantes a Hacienda.'}
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {s.enabled ? <Badge color={s.environment === 'prod' ? 'green' : 'amber'}>{s.environment === 'prod' ? 'Producción' : 'Pruebas'}</Badge> : <Badge>Inactiva</Badge>}
+            {s.enabled ? <Badge color={s.environment === 'prod' ? 'green' : 'amber'}>{s.environment === 'prod' ? 'Producción' : s.environment === 'sim' ? 'Simulación' : 'Pruebas'}</Badge> : <Badge>Inactiva</Badge>}
             <Toggle checked={!!s.enabled} onChange={toggle} label={s.enabled ? 'Activada' : 'Activar'} />
           </div>
         </div>
@@ -275,6 +275,7 @@ function Config() {
           <div className="font-semibold">Conexión con Hacienda (ATV)</div>
           <Field label="Ambiente">
             <select className="input" value={s.environment} onChange={set('environment')} disabled={s.enabled}>
+              <option value="sim">Simulación — datos de prueba, no se envía nada a Hacienda</option>
               <option value="stag">Pruebas (sandbox) — sin validez fiscal</option>
               <option value="prod">Producción</option>
             </select>

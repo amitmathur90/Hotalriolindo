@@ -112,7 +112,7 @@ export async function refreshItem(bid: string, source: string, sourceId: string)
   if (!item) return;
   let credited = 0;
   if (source === 'edoc') {
-    const ncs = await db.query(`SELECT payload FROM e_documents WHERE business_id=$1 AND doc_type='03' AND status <> 'rejected' AND reference->>'doc_id'=$2`, [bid, sourceId]);
+    const ncs = await db.query(`SELECT payload FROM e_documents WHERE business_id=$1 AND doc_type='03' AND status <> 'rejected' AND environment <> 'sim' AND reference->>'doc_id'=$2`, [bid, sourceId]);
     credited = ncs.reduce((s, n) => s + payloadTotals(n.payload).total, 0);
   }
   if (source === 'received') {
@@ -128,7 +128,7 @@ export async function refreshItem(bid: string, source: string, sourceId: string)
 }
 
 async function postDocuments(bid: string, k: K) {
-  const docs = await db.query(`SELECT * FROM e_documents WHERE business_id=$1 AND sale_id IS NULL AND payload IS NOT NULL ORDER BY created_at`, [bid]);
+  const docs = await db.query(`SELECT * FROM e_documents WHERE business_id=$1 AND sale_id IS NULL AND payload IS NOT NULL AND environment <> 'sim' ORDER BY created_at`, [bid]);
   const byId = new Map(docs.map((d) => [d.id, d]));
   let n = 0;
   for (const d of docs) {

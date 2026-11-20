@@ -5,6 +5,9 @@ import { db } from '../db.ts';
 import { receiptSig } from '../util.ts';
 import { APP_NAME } from '../config.ts';
 import { amountInWords } from './words.ts';
+import { DEFAULT_RESOLUTION } from './codes.ts';
+/** Stored resolution text, upgrading the short text older versions saved to the full legal wording. */
+const resolutionText = (s: any) => (!s?.resolution_text || /^Autorizado mediante resoluci.n MH-DGT-RES-0027-2024 ·/.test(s.resolution_text) ? DEFAULT_RESOLUTION : s.resolution_text);
 
 /**
  * PDF of a comprobante electrónico (Hacienda v4.4), laid out like the usual Costa Rican invoice PDF:
@@ -50,7 +53,7 @@ export function parseComprobante(xml: string) {
     nombre: txt(e, 'Nombre'), comercial: txt(e, 'NombreComercial'),
     idType: txt(e, 'Identificacion', 'Tipo'), id: txt(e, 'Identificacion', 'Numero') || txt(e, 'IdentificacionExtranjero'),
     email: txt(e, 'CorreoElectronico'), phone: txt(e, 'Telefono', 'NumTelefono'),
-    address: [txt(e, 'Ubicacion', 'OtrasSenas'), txt(e, 'OtrasSenasExtranjero')].filter(Boolean).join(' '),
+    address: [placeName(txt(e, 'Ubicacion', 'Provincia'), txt(e, 'Ubicacion', 'Canton'), txt(e, 'Ubicacion', 'Distrito')), txt(e, 'Ubicacion', 'OtrasSenas'), txt(e, 'OtrasSenasExtranjero')].filter(Boolean).join('. '),
   };
   const res = kid(root, 'ResumenFactura');
   const moneda = res ? kid(res, 'CodigoTipoMoneda') : null;
@@ -100,6 +103,24 @@ const fmtDate = (iso: string) => {
   return `${m[3]}/${m[2]}/${m[1]}, ${String(h).padStart(2, '0')}:${m[5]} ${ap}`;
 };
 
+/** Names of the territorial division (provincia / cantón / distrito) printed in the address, like Cubo does. */
+const PROVINCIAS: Record<string, string> = { '1': 'San José', '2': 'Alajuela', '3': 'Cartago', '4': 'Heredia', '5': 'Guanacaste', '6': 'Puntarenas', '7': 'Limón' };
+const CANTONES: Record<string, string> = {
+  '6-01': 'Puntarenas', '6-02': 'Esparza', '6-03': 'Buenos Aires', '6-04': 'Montes de Oro', '6-05': 'Osa', '6-06': 'Quepos', '6-07': 'Golfito',
+  '6-08': 'Coto Brus', '6-09': 'Parrita', '6-10': 'Corredores', '6-11': 'Garabito',
+};
+const DISTRITOS: Record<string, string> = {
+  '6-05-01': 'Puerto Cortés', '6-05-02': 'Palmar', '6-05-03': 'Sierpe', '6-05-04': 'Bahía Ballena', '6-05-05': 'Piedras Blancas', '6-05-06': 'Bahía Drake',
+};
+function placeName(prov: string | null, canton: string | null, distrito: string | null) {
+  const p = String(Number(prov || 0)), c = String(canton || '').padStart(2, '0'), d = String(distrito || '').padStart(2, '0');
+  return [PROVINCIAS[p], CANTONES[`${p}-${c}`], DISTRITOS[`${p}-${c}-${d}`]].filter(Boolean).join(', ') || null;
+}
+/** Activity descriptions printed under the emisor (code → Hacienda's description). */
+const ACTIVIDADES: Record<string, string> = {
+  '551001': '5510.1 - Actividades de alojamiento para estancias cortas en hoteles y moteles',
+};
+
 export type PdfOptions = {
   status?: 'accepted' | 'rejected' | 'pending' | 'sent' | 'error' | string | null;
   environment?: string | null; activityLabel?: string | null; resolution?: string | null; qrUrl?: string | null; footerNote?: string | null;
@@ -117,9 +138,14 @@ export async function renderPdf(p: ParsedDoc, o: PdfOptions = {}): Promise<Buffe
   const ink = '#0f172a', muted = '#64748b', line = '#e2e8f0', head = '#1e293b', soft = '#f1f5f9';
   const cur = p.moneda;
 
+  // --- page frame like Cubo's: dark band on top, grey strip on the left
+  doc.save().rect(0, 0, doc.page.width, 8).fill('#1e293b').rect(0, 8, 12, doc.page.height - 8).fill('#e5e7eb').restore();
+
   // --- header (right aligned)
   let y = 40;
-  if (o.environment === 'stag') {
+  if (o.environment === 'sim') {
+    doc.save().rect(L, y, 200, 18).fill('#fee2e2').fillColor('#991b1b').font('Helvetica-Bold').fontSize(8).text('SIMULACIÓN · NO ENVIADO A HACIENDA', L + 6, y + 5).restore();
+  } else if (o.environment === 'stag') {
     doc.save().rect(L, y, 150, 18).fill('#fef3c7').fillColor('#92400e').font('Helvetica-Bold').fontSize(8).text('PRUEBAS · SIN VALIDEZ FISCAL', L + 6, y + 5).restore();
   }
   doc.fillColor(ink).font('Helvetica-Bold').fontSize(18).text(p.title, L, y, { width: W, align: 'right' });
@@ -153,7 +179,7 @@ export async function renderPdf(p: ParsedDoc, o: PdfOptions = {}): Promise<Buffe
     doc.font('Helvetica').fontSize(8.5);
     if (party.comercial && party.comercial !== party.nombre) { doc.text(party.comercial, x, yy, { width: colW }); yy = doc.y + 1; }
     if (party.id) { doc.text(`${ID_LABEL[party.idType] || 'Identificación'}: ${party.id}`, x, yy, { width: colW }); yy = doc.y + 1; }
-    if (isEmisor && (o.activityLabel || p.actividad)) { doc.fontSize(7.5).text(o.activityLabel || `Actividad económica: ${p.actividad}`, x, yy, { width: colW }); yy = doc.y + 1; doc.fontSize(8.5); }
+    if (isEmisor && (o.activityLabel || p.actividad)) { doc.fontSize(7.5).text(o.activityLabel || ACTIVIDADES[p.actividad || ''] || `Actividad económica: ${p.actividad}`, x, yy, { width: colW }); yy = doc.y + 1; doc.fontSize(8.5); }
     if (party.email) { doc.text(`Email: ${party.email}`, x, yy, { width: colW }); yy = doc.y + 1; }
     if (party.phone) { doc.text(`Tel: ${party.phone}`, x, yy, { width: colW }); yy = doc.y + 1; }
     if (party.address) { doc.fontSize(8).text(party.address.toUpperCase(), x, yy, { width: colW }); }
@@ -307,7 +333,7 @@ export async function documentPdf(d: any): Promise<Buffer> {
   const s = await db.one(`SELECT * FROM hacienda_settings WHERE business_id=$1`, [d.business_id]);
   const xml = await documentXml(d);
   return renderPdf(parseComprobante(xml), {
-    status: d.status, environment: d.environment, resolution: s?.resolution_text || null, qrUrl: publicPdfUrl(d.id),
+    status: d.status, environment: d.environment, resolution: resolutionText(s), qrUrl: publicPdfUrl(d.id),
     footerNote: d.replaced_by ? 'Documento sustituido por factura electrónica' : d.annulled_by ? 'Documento anulado mediante nota de crédito' : null,
   });
 }
@@ -333,6 +359,7 @@ export async function renderThermal(p: ParsedDoc, o: PdfOptions & { width: '80mm
     const hr = () => { doc.moveTo(M, doc.y + 2).lineTo(W - M, doc.y + 2).dash(1.5, { space: 1.5 }).strokeColor('#000').lineWidth(0.5).stroke().undash(); doc.y += 5; };
     doc.y = M;
     if (o.environment === 'stag') center('*** PRUEBAS - SIN VALIDEZ FISCAL ***', fs, true);
+    if (o.environment === 'sim') center('*** SIMULACION - SIN VALIDEZ FISCAL ***', fs, true);
     center(p.emisor.comercial || p.emisor.nombre, fs + 2, true);
     if (p.emisor.comercial) center(p.emisor.nombre);
     center(`${ID_LABEL[p.emisor.idType] || 'Céd.'} ${p.emisor.id}`);
@@ -388,5 +415,5 @@ export async function renderThermal(p: ParsedDoc, o: PdfOptions & { width: '80mm
 export async function documentThermalPdf(d: any, width: '80mm' | '58mm') {
   const { documentXml } = await import('./service.ts');
   const s = await db.one(`SELECT * FROM hacienda_settings WHERE business_id=$1`, [d.business_id]);
-  return renderThermal(parseComprobante(await documentXml(d)), { width, status: d.status, environment: d.environment, resolution: s?.resolution_text || null, qrUrl: publicPdfUrl(d.id) });
+  return renderThermal(parseComprobante(await documentXml(d)), { width, status: d.status, environment: d.environment, resolution: resolutionText(s), qrUrl: publicPdfUrl(d.id) });
 }

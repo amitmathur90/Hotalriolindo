@@ -6,6 +6,12 @@
  * HACIENDA_IDP_URL / HACIENDA_API_URL override the endpoints (used by the automated tests with a mock server).
  */
 export type HaciendaEnv = 'stag' | 'prod';
+/** 'sim' = Simulación: documents are generated, signed and "accepted" locally and never sent to Hacienda. */
+export const SIM_ENV: string = 'sim';
+const realEnv = (env: string) => {
+  if (env !== 'stag' && env !== 'prod') throw new Error('Ambiente de simulación: no se contacta a Hacienda');
+  return env as HaciendaEnv;
+};
 
 const IDP: Record<HaciendaEnv, string> = {
   stag: 'https://idp.comprobanteselectronicos.go.cr/auth/realms/rut-stag/protocol/openid-connect/token',
@@ -16,8 +22,8 @@ const API: Record<HaciendaEnv, string> = {
   stag: 'https://api-sandbox.comprobanteselectronicos.go.cr/recepcion/v1/',
   prod: 'https://api.comprobanteselectronicos.go.cr/recepcion/v1/',
 };
-const idpUrl = (env: HaciendaEnv) => process.env.HACIENDA_IDP_URL || IDP[env];
-const apiUrl = (env: HaciendaEnv) => (process.env.HACIENDA_API_URL || API[env]).replace(/\/?$/, '/');
+const idpUrl = (env: HaciendaEnv) => IDP[realEnv(env)] && (process.env.HACIENDA_IDP_URL || IDP[env]);
+const apiUrl = (env: HaciendaEnv) => API[realEnv(env)] && (process.env.HACIENDA_API_URL || API[env]).replace(/\/?$/, '/');
 
 const tokens = new Map<string, { token: string; exp: number }>();
 export const clearToken = (env: HaciendaEnv, username: string) => tokens.delete(`${env}:${username}`);

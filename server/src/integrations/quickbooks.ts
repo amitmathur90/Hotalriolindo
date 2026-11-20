@@ -85,7 +85,7 @@ const addDays = (d: string, n: number) => new Date(new Date(d + 'T12:00:00Z').ge
 /** Totals in colones of the documents Hacienda accepted on one Costa Rica calendar day. */
 export async function dayTotals(businessId: string, day: string) {
   const from = new Date(day + 'T06:00:00Z'), to = new Date(addDays(day, 1) + 'T06:00:00Z');
-  const docs = await db.query(`SELECT id, doc_type, status, xml_signed, exchange_rate FROM e_documents WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3`, [businessId, from, to]);
+  const docs = await db.query(`SELECT id, doc_type, status, xml_signed, exchange_rate FROM e_documents WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 AND environment <> 'sim'`, [businessId, from, to]);
   const t = { income: 0, tax: 0, service: 0, tips: 0, cash: 0, card: 0, other: 0, docs: 0, pending: 0 };
   for (const d of docs) {
     if (d.status === 'pending' || d.status === 'sent') { t.pending++; continue; }

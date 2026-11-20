@@ -21,7 +21,7 @@ export const REF_CODES: Record<string, string> = {
   '05': 'Sustituye comprobante provisional por contingencia', '06': 'Devolución de mercancía', '07': 'Sustituye comprobante electrónico', '99': 'Otros',
 };
 /** Printed on receipts; editable in Settings → Hacienda. */
-export const DEFAULT_RESOLUTION = 'Autorizado mediante resolución MH-DGT-RES-0027-2024 · Comprobantes electrónicos v4.4';
+export const DEFAULT_RESOLUTION = 'Autorizado mediante la resolución MH-DGT-RES-0027-2024 del 13 de noviembre de 2024 de la Dirección General de Tributación, publicado en el diario oficial la Gaceta el 15 de noviembre de 2024.';
 
 /** Identification types. */
 export const ID_TYPES: Record<string, { label: string; len: number[] }> = {

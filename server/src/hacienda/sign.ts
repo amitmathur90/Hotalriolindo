@@ -42,6 +42,24 @@ export async function loadP12(p12: Buffer, pin: string): Promise<SigningCert> {
   };
 }
 
+let simCertP: Promise<SigningCert> | null = null;
+/** Throw-away self-signed key used only in the Simulación environment when no .p12 has been uploaded. */
+export function simulationCert(): Promise<SigningCert> {
+  if (!simCertP) {
+    simCertP = (async () => {
+      const keys = forge.pki.rsa.generateKeyPair(2048);
+      const cert = forge.pki.createCertificate();
+      cert.publicKey = keys.publicKey; cert.serialNumber = '01';
+      cert.validity.notBefore = new Date(Date.now() - 86400e3); cert.validity.notAfter = new Date(Date.now() + 10 * 365 * 86400e3);
+      const attrs = [{ name: 'commonName', value: 'SIMULACION - SIN VALIDEZ FISCAL' }, { name: 'countryName', value: 'CR' }];
+      cert.setSubject(attrs); cert.setIssuer(attrs); cert.sign(keys.privateKey, forge.md.sha256.create());
+      const der = forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], 'sim', { algorithm: '3des' })).getBytes();
+      return loadP12(Buffer.from(der, 'binary'), 'sim');
+    })();
+  }
+  return simCertP;
+}
+
 /** Signs a comprobante with an enveloped XAdES-EPES signature (RSA-SHA256, inclusive C14N), as Hacienda requires. */
 export async function signXml(xml: string, cert: SigningCert): Promise<string> {
   const doc = xadesjs.Parse(xml);

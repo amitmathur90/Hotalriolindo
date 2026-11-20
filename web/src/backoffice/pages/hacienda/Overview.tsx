@@ -38,11 +38,16 @@ export function Dashboard() {
         <div className="card p-5">
           <div className="mb-2 font-semibold">Estado de la integración</div>
           <div className="space-y-2">
-            <Health ok={h.enabled}>{h.enabled ? `Activa en ${h.environment === 'prod' ? 'producción' : 'pruebas'}` : 'Facturación electrónica desactivada'}</Health>
-            <Health ok={h.credentials_ok !== false}>{h.credentials_ok === false ? 'Hacienda rechazó las credenciales de la API' : 'Credenciales de la API funcionando'}</Health>
+            <Health ok={h.enabled}>{h.enabled ? `Activa en ${h.environment === 'prod' ? 'producción' : h.environment === 'sim' ? 'simulación (no se envía nada a Hacienda)' : 'pruebas'}` : 'Facturación electrónica desactivada'}</Health>
+            {h.simulation ? <Health ok={false} warn>Simulación: no se usan credenciales ni se contacta a Hacienda</Health>
+              : !h.has_credentials ? <Health ok={false}>Sin credenciales de la API</Health>
+              : h.credentials_ok === false ? <Health ok={false}>Hacienda rechazó las credenciales de la API</Health>
+              : h.credentials_ok ? <Health ok>Credenciales de la API funcionando</Health>
+              : <Health ok={false} warn>Credenciales de la API cargadas, aún sin usar con Hacienda</Health>}
+            {h.simulation && h.certificate_days_left == null ? <Health ok={false} warn>Simulación: se firma con una llave de prueba interna</Health> :
             <Health ok={h.certificate_days_left == null ? false : h.certificate_days_left > 30} warn={h.certificate_days_left != null && h.certificate_days_left > 0}>
               {h.certificate_days_left == null ? 'Sin llave criptográfica' : h.certificate_days_left > 0 ? `Llave criptográfica vence en ${h.certificate_days_left} días` : 'Llave criptográfica vencida'}
-            </Health>
+            </Health>}
             <Health ok={h.queue === 0 || (h.oldest_in_queue && Date.now() - new Date(h.oldest_in_queue).getTime() < 3600e3)} warn>
               {h.queue ? `${h.queue} documento(s) en cola${h.oldest_in_queue ? ` · el más antiguo ${dt(h.oldest_in_queue)}` : ''}` : 'Cola vacía'}
             </Health>

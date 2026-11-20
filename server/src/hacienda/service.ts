@@ -4,12 +4,12 @@ import { db, json, type Q } from '../db.ts';
 import { bad, notify, receiptSig } from '../util.ts';
 import { DOC_NAMES, ID_TYPES, RULES_VERSION, clave, consecutivo, crDateTime, digits, idNumber, securityCode, validateId, type DocType } from './codes.ts';
 import { buildXml, type BuildInput, type Receptor } from './xml.ts';
-import { loadP12, signXml, verifyXml, type SigningCert } from './sign.ts';
+import { loadP12, signXml, simulationCert, verifyXml, type SigningCert } from './sign.ts';
 import { SCHEMA_VERSION, validateComprobante } from './xsd.ts';
 import { unknownCodes } from './cabys.ts';
 import { decrypt, decryptBuf } from './secrets.ts';
 import { documentPdf } from './pdf.ts';
-import { clearToken, getStatus, getToken, sendDocument, type HaciendaEnv } from './client.ts';
+import { SIM_ENV, clearToken, getStatus, getToken, sendDocument, type HaciendaEnv } from './client.ts';
 
 /**
  * Electronic documents lifecycle:
@@ -295,6 +295,7 @@ export async function createAdjustmentNote(q: Q, o: { businessId: string; docId:
 
 const certCache = new Map<string, SigningCert>();
 async function signingCert(s: any) {
+  if (!s?.cert_p12_enc && s?.environment === SIM_ENV) return simulationCert();
   const k = `${s.business_id}:${new Date(s.updated_at).getTime()}`;
   let c = certCache.get(k);
   if (!c) {
@@ -380,7 +381,7 @@ async function processDoc(d: any) {
 
   // 1. Validate + sign (only once: the signed XML is an immutable snapshot)
   if (d.status === 'pending' && !d.xml_signed) {
-    if (!s?.cert_p12_enc) return retry('Falta la llave criptográfica (.p12) en Configuración → Hacienda');
+    if (!s?.cert_p12_enc && env !== SIM_ENV) return retry('Falta la llave criptográfica (.p12) en Configuración → Hacienda');
     let r;
     try {
       r = await renderUnsigned(d, s);
@@ -391,7 +392,7 @@ async function processDoc(d: any) {
     await logEvent(d, 'validated', { status: 'pending', message: `XML válido (${r.validation.schema})`, detail: { hash: sha256(r.xml) } });
     let signed: string;
     try {
-      const cert = await signingCert(s);
+      const cert = env === SIM_ENV && !s?.cert_p12_enc ? await simulationCert() : await signingCert(s);
       if (cert.notAfter < new Date()) return final('validation_failed', `La llave criptográfica venció el ${cert.notAfter.toLocaleDateString('es-CR')}`);
       signed = await signXml(r.xml, cert);
       if (!(await verifyXml(signed))) throw new Error('La firma generada no es válida');
@@ -405,6 +406,9 @@ async function processDoc(d: any) {
     });
     await logEvent(d, 'signed', { status: 'signed', message: 'Firmado (XAdES-EPES) y verificado', detail: { hash: sha256(signed) } });
   }
+
+  // Simulación: never contacts Hacienda; the decision is made locally
+  if (env === SIM_ENV) return simulateDecision(d);
 
   // 2. Authenticate
   if (!s?.api_username || !s.api_password_enc) return retry('Faltan el usuario y la contraseña de la API de Hacienda');
@@ -491,6 +495,18 @@ async function processDoc(d: any) {
   }
   if (d.status !== 'processing') await update(d.id, { status: 'processing' });
   return retry('Hacienda está procesando el comprobante');
+}
+
+/** Local "answer" for Simulación documents. Receptor name RECHAZAR → rechazado (to try the rejection flow). */
+async function simulateDecision(d: any) {
+  if (!d.xml_signed) return;
+  const reject = /RECHAZAR/i.test(d.receptor?.nombre || d.receptor?.name || '');
+  const msg = reject ? 'SIMULACIÓN: rechazo de prueba (receptor RECHAZAR)' : 'SIMULACIÓN: aceptado localmente. Este documento NO fue enviado a Hacienda y no tiene validez fiscal.';
+  const responseXml = `<?xml version="1.0" encoding="utf-8"?>
+<MensajeHacienda simulacion="true"><Clave>${d.clave}</Clave><Mensaje>${reject ? 3 : 1}</Mensaje><DetalleMensaje>${msg}</DetalleMensaje></MensajeHacienda>`;
+  const now = new Date();
+  await update(d.id, { status: reject ? 'rejected' : 'accepted', response_xml: responseXml, message: reject ? msg : null, attempts: d.attempts + 1, submitted_at: d.submitted_at || now, decided_at: now, ambiguous: false });
+  await logEvent(d, reject ? 'rejected' : 'accepted', { status: reject ? 'rejected' : 'accepted', message: msg });
 }
 
 let running = false;

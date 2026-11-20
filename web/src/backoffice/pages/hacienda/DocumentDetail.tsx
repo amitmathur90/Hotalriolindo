@@ -40,7 +40,7 @@ export default function DocumentDetail({ id, onClose, onChanged }: { id: string;
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-3">
           <EDocStatus status={d.status} />
-          {d.environment === 'stag' && <span className="text-xs text-amber-600">ambiente de pruebas</span>}
+          {d.environment === 'stag' && <span className="text-xs text-amber-600">ambiente de pruebas</span>}{d.environment === 'sim' && <span className="text-xs text-rose-600">simulación — no enviado a Hacienda</span>}
           <span className="tabular-nums font-semibold">{d.total != null ? fmtCur(d.total, d.currency) : '—'}</span>
           {d.ambiguous && <span className="text-xs text-amber-700">verificando si Hacienda lo recibió</span>}
         </div>

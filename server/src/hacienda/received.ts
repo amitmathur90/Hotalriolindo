@@ -5,8 +5,8 @@ import { bad, notify } from '../util.ts';
 import { consecutivo, crDateTime, digits, idNumber } from './codes.ts';
 import { parseComprobante } from './pdf.ts';
 import { decrypt, decryptBuf } from './secrets.ts';
-import { loadP12, signXml } from './sign.ts';
-import { clearToken, getStatus, getToken, sendDocument, type HaciendaEnv } from './client.ts';
+import { loadP12, signXml, simulationCert } from './sign.ts';
+import { SIM_ENV, clearToken, getStatus, getToken, sendDocument, type HaciendaEnv } from './client.ts';
 import { getSettings } from './service.ts';
 
 /**
@@ -137,6 +137,12 @@ async function processOne(r: any) {
   const s = await getSettings(db, r.business_id);
   const env = (s?.environment || 'stag') as HaciendaEnv;
   const retry = (m: string) => upd(r.id, { mr_attempts: r.mr_attempts + 1, mr_next_attempt_at: new Date(Date.now() + backoff(r.mr_attempts) * 1000), mr_message: m });
+  if (s?.enabled && env === SIM_ENV) {
+    // Simulación: signed locally, never sent to Hacienda
+    const cert = s.cert_p12_enc ? await loadP12(decryptBuf(s.cert_p12_enc), decrypt(s.cert_pin_enc)) : await simulationCert();
+    const xml = r.mr_xml || (await signXml(buildMensajeReceptor(r, s), cert));
+    return upd(r.id, { mr_xml: xml, mr_status: 'accepted', mr_message: 'SIMULACIÓN: no enviado a Hacienda', mr_response_xml: null });
+  }
   if (!s?.enabled || !s.api_username || !s.api_password_enc || !s.cert_p12_enc) return retry('La facturación electrónica no está activa o faltan credenciales');
   let token: string;
   try {

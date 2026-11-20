@@ -158,7 +158,7 @@ export async function ivaSummary(bid: string, month: string) {
   const to = new Date(from);
   to.setUTCMonth(to.getUTCMonth() + 1);
   // a tiquete replaced by a factura is offset by its nota de crédito, so every non-rejected document counts
-  const docs = await db.query(`SELECT * FROM e_documents WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 AND status <> 'rejected'`, [bid, from, to]);
+  const docs = await db.query(`SELECT * FROM e_documents WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 AND status <> 'rejected' AND environment <> 'sim'`, [bid, from, to]);
   const sales: Record<string, { rate: number; base: number; iva: number; docs: number }> = {};
   let exempt = 0, otros = 0, count = 0, unread = 0;
   for (const d of docs) {

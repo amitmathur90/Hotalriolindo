@@ -4,8 +4,8 @@ import { requirePerm, requireUser } from '../auth.ts';
 import { ah, audit, bad, notFound, range } from '../util.ts';
 import { ID_TYPES, digits, validateId, DEFAULT_RESOLUTION, DOC_NAMES, type DocType } from '../hacienda/codes.ts';
 import { encrypt, decrypt, decryptBuf } from '../hacienda/secrets.ts';
-import { loadP12, signXml, verifyXml } from '../hacienda/sign.ts';
-import { getToken } from '../hacienda/client.ts';
+import { loadP12, signXml, simulationCert, verifyXml } from '../hacienda/sign.ts';
+import { SIM_ENV, getToken } from '../hacienda/client.ts';
 import { annulDocument, cleanLines, cleanReceptor, convertToFactura, createAdjustmentNote, emailDocument, getSettings, issueDocument, kickQueue, logEvent, processQueue, smtpConfigured, type DocPayload } from '../hacienda/service.ts';
 import { documentPdf, documentThermalPdf, parseComprobante, renderPdf } from '../hacienda/pdf.ts';
 import { usdRate } from '../hacienda/fx.ts';
@@ -48,6 +48,7 @@ function missing(s: any): string[] {
   if (!/^\d$/.test(digits(s?.provincia)) || !digits(s?.canton) || !digits(s?.distrito)) m.push('Provincia / cantón / distrito');
   if (!s?.otras_senas || s.otras_senas.trim().length < 5) m.push('Otras señas (dirección)');
   if (!s?.email) m.push('Correo electrónico del emisor');
+  if (s?.environment === SIM_ENV) return m; // Simulación: no API credentials or .p12 needed
   if (!s?.api_username || !s?.api_password_enc) m.push('Usuario y contraseña de la API (ATV)');
   if (!s?.cert_p12_enc) m.push('Llave criptográfica (.p12)');
   return m;
@@ -64,7 +65,7 @@ r.put('/settings', requirePerm('settings.manage'), ah(async (req, res) => {
   await db.query(`INSERT INTO hacienda_settings (business_id) VALUES ($1) ON CONFLICT (business_id) DO NOTHING`, [bid]);
   const data: Record<string, any> = {};
   for (const f of FIELDS) if (f in b) data[f] = b[f] === '' ? null : String(b[f]).trim();
-  if (data.environment && !['stag', 'prod'].includes(data.environment)) throw bad('Ambiente inválido');
+  if (data.environment && !['sim', 'stag', 'prod'].includes(data.environment)) throw bad('Ambiente inválido');
   if (data.id_number) data.id_number = digits(data.id_number);
   if (data.provider_id) data.provider_id = digits(data.provider_id);
   if (data.default_cabys && !/^\d{13}$/.test(digits(data.default_cabys))) throw bad('El CABYS debe tener 13 dígitos');
@@ -84,6 +85,11 @@ r.put('/settings', requirePerm('settings.manage'), ah(async (req, res) => {
     await db.query(`UPDATE hacienda_settings SET ${keys.map((k, i) => `${k}=$${i + 2}`).join(', ')}, updated_at=now() WHERE business_id=$1`, [bid, ...keys.map((k) => data[k])]);
   }
   let s = await getSettings(db, bid);
+  // Leaving Simulación for a real environment that is not fully configured switches e-invoicing off
+  if (s?.enabled && 'environment' in data && !('enabled' in b) && missing(s).length) {
+    await db.query(`UPDATE hacienda_settings SET enabled=false, updated_at=now() WHERE business_id=$1`, [bid]);
+    s = await getSettings(db, bid);
+  }
   if ('enabled' in b) {
     if (b.enabled && missing(s).length) throw bad('Para activar falta: ' + missing(s).join(', '));
     await db.query(`UPDATE hacienda_settings SET enabled=$2, updated_at=now() WHERE business_id=$1`, [bid, !!b.enabled]);
@@ -122,6 +128,14 @@ r.post('/settings/certificate', requirePerm('settings.manage'), ah(async (req, r
 r.post('/settings/test', requirePerm('settings.manage'), ah(async (req, res) => {
   const s = await getSettings(db, req.auth.businessId);
   const out: any = { credentials: null, certificate: null };
+  if (s?.environment === SIM_ENV) {
+    const cert = s.cert_p12_enc ? await loadP12(decryptBuf(s.cert_p12_enc), decrypt(s.cert_pin_enc)) : await simulationCert();
+    const signed = await signXml('<Prueba xmlns="urn:its-pos:prueba"><Texto>ok</Texto></Prueba>', cert);
+    return res.json({
+      credentials: { ok: true, message: 'Simulación: no se contacta a Hacienda (no se necesitan credenciales)' },
+      certificate: { ok: await verifyXml(signed), message: s.cert_p12_enc ? `Firma correcta · ${cert.subject}` : 'Simulación: se firma con una llave de prueba interna' },
+    });
+  }
   try {
     if (!s?.api_username || !s.api_password_enc) throw new Error('Falta usuario o contraseña de la API');
     await getToken(s.environment, s.api_username, decrypt(s.api_password_enc));
@@ -557,6 +571,7 @@ r.get('/dashboard', VIEW_DOCS, ah(async (req, res) => {
     health: {
       enabled: !!s?.enabled, environment: s?.environment || 'stag', queue: Number(queue?.n || 0), oldest_in_queue: queue?.oldest || null,
       last_accepted: last?.last_accepted || null, credentials_ok: lastAuth ? lastAuth.kind !== 'auth_error' : null,
+      has_credentials: !!(s?.api_username && s?.api_password_enc), simulation: s?.environment === SIM_ENV,
       certificate_days_left: certDays, certificate_expires_at: s?.cert_expires_at || null,
     },
   });
