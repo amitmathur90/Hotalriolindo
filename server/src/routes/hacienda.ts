@@ -6,15 +6,16 @@ import { ID_TYPES, digits, validateId, DEFAULT_RESOLUTION, DOC_NAMES, type DocTy
 import { encrypt, decrypt, decryptBuf } from '../hacienda/secrets.ts';
 import { loadP12, signXml, verifyXml } from '../hacienda/sign.ts';
 import { getToken } from '../hacienda/client.ts';
-import { annulDocument, cleanReceptor, convertToFactura, emailDocument, getSettings, issueDocument, kickQueue, processQueue, smtpConfigured, type DocPayload } from '../hacienda/service.ts';
-import { documentPdf, parseComprobante, renderPdf } from '../hacienda/pdf.ts';
+import { annulDocument, cleanLines, cleanReceptor, convertToFactura, createAdjustmentNote, emailDocument, getSettings, issueDocument, kickQueue, logEvent, processQueue, smtpConfigured, type DocPayload } from '../hacienda/service.ts';
+import { documentPdf, documentThermalPdf, parseComprobante, renderPdf } from '../hacienda/pdf.ts';
 import { usdRate } from '../hacienda/fx.ts';
+import { assignProductCabys, catalogueInfo, importCabys, mappingReport, searchLocal } from '../hacienda/cabys.ts';
 import { DECISIONS, decideReceived, importReceivedXml, pollInbox, processReceivedQueue } from '../hacienda/received.ts';
 
 const r = Router();
 
 const FIELDS = ['environment', 'legal_name', 'trade_name', 'id_type', 'id_number', 'activity_code', 'provider_id', 'provincia', 'canton', 'distrito',
-  'barrio', 'otras_senas', 'phone', 'email', 'default_cabys', 'resolution_text', 'api_username', 'terminal', 'usd_rate_manual', 'imap_host', 'imap_port', 'imap_user',
+  'barrio', 'otras_senas', 'phone', 'email', 'default_cabys', 'resolution_text', 'api_username', 'terminal', 'usd_rate_manual', 'imap_host', 'imap_port', 'imap_user', 'registro_fiscal_8707',
   'expense_category'] as const;
 
 /** Settings as shown to the Back Office (secrets are never returned). */
@@ -68,6 +69,8 @@ r.put('/settings', requirePerm('settings.manage'), ah(async (req, res) => {
   if (data.provider_id) data.provider_id = digits(data.provider_id);
   if (data.default_cabys && !/^\d{13}$/.test(digits(data.default_cabys))) throw bad('El CABYS debe tener 13 dígitos');
   if (b.api_password) data.api_password_enc = encrypt(String(b.api_password));
+  // New credentials: documents waiting on an authentication error are retried right away
+  if (b.api_password || 'api_username' in data) await db.query(`UPDATE e_documents SET next_attempt_at=now() WHERE business_id=$1 AND status='auth_error'`, [bid]);
   if (b.imap_password) data.imap_pass_enc = encrypt(String(b.imap_password));
   if ('auto_accept' in b) data.auto_accept = !!b.auto_accept;
   if ('terminal' in data) {
@@ -141,27 +144,34 @@ r.post('/settings/test', requirePerm('settings.manage'), ah(async (req, res) => 
 // ---------------------------------------------------------------- Documents
 
 const LIST_COLS = `d.id, d.doc_type, d.environment, d.clave, d.consecutivo, d.issued_at, d.status, d.message, d.attempts, d.total, d.receptor,
-  d.reference, d.replaced_by, d.emailed_at, d.email_error, d.sale_id, s.receipt_no, s.type AS sale_type, st.name AS store_name,
-  d.source, d.currency, d.exchange_rate, d.external_ref, d.annulled_by, d.notes`;
+  d.reference, d.replaced_by, d.emailed_at, d.email_error, d.sale_id, s.receipt_no, s.type AS sale_type, st.name AS store_name, d.store_id,
+  d.source, d.currency, d.exchange_rate, d.external_ref, d.annulled_by, d.notes, d.terminal, d.submitted_at, d.decided_at, d.ambiguous`;
 
-r.get('/documents', requirePerm('reports.view', 'settings.manage'), ah(async (req, res) => {
+const VIEW_DOCS = requirePerm('reports.view', 'settings.manage', 'accounting.view');
+const ADJUST = requirePerm('settings.manage', 'pos.refund', 'accounting.manage');
+
+/** List with filters (date range, status, type, source, currency, branch, text) and pagination. */
+r.get('/documents', VIEW_DOCS, ah(async (req, res) => {
   const { from, to } = range(req);
   const params: any[] = [req.auth.businessId, from, to];
   let where = `d.business_id=$1 AND d.issued_at >= $2 AND d.issued_at < $3`;
-  if (req.query.status) where += ` AND d.status=$${params.push(req.query.status)}`;
+  if (req.query.status) where += ` AND d.status = ANY($${params.push(String(req.query.status).split(','))}::text[])`;
   if (req.query.doc_type) where += ` AND d.doc_type=$${params.push(req.query.doc_type)}`;
   if (req.query.source) where += ` AND d.source=$${params.push(req.query.source)}`;
   if (req.query.currency) where += ` AND d.currency=$${params.push(req.query.currency)}`;
+  if (req.query.store_id) where += ` AND d.store_id=$${params.push(req.query.store_id)}`;
   if (req.query.q) {
     const i = params.push(`%${req.query.q}%`);
     where += ` AND (d.clave ILIKE $${i} OR d.consecutivo ILIKE $${i} OR s.receipt_no ILIKE $${i} OR d.external_ref ILIKE $${i} OR d.receptor->>'nombre' ILIKE $${i} OR d.receptor->>'id_number' ILIKE $${i})`;
   }
+  const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 500));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
   const rows = await db.query(
-    `SELECT ${LIST_COLS} FROM e_documents d LEFT JOIN sales s ON s.id=d.sale_id JOIN stores st ON st.id=d.store_id WHERE ${where} ORDER BY d.issued_at DESC, d.created_at DESC LIMIT 1000`,
-    params,
-  );
+    `SELECT ${LIST_COLS} FROM e_documents d LEFT JOIN sales s ON s.id=d.sale_id JOIN stores st ON st.id=d.store_id WHERE ${where}
+      ORDER BY d.issued_at DESC, d.created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
+  const tot = await db.one(`SELECT count(*)::int AS n FROM e_documents d LEFT JOIN sales s ON s.id=d.sale_id WHERE ${where}`, params);
   const counts = await db.query(`SELECT status, count(*)::int AS n FROM e_documents WHERE business_id=$1 GROUP BY status`, [req.auth.businessId]);
-  res.json({ rows, counts: Object.fromEntries(counts.map((c) => [c.status, Number(c.n)])) });
+  res.json({ rows, total: Number(tot?.n || 0), limit, offset, counts: Object.fromEntries(counts.map((c) => [c.status, Number(c.n)])) });
 }));
 
 async function loadDoc(req: any) {
@@ -169,57 +179,119 @@ async function loadDoc(req: any) {
   if (!d) throw notFound('Documento');
   return d;
 }
+const publicDoc = (d: any) => {
+  const { xml_signed, xml_unsigned, response_xml, ...rest } = d;
+  return { ...rest, has_xml_unsigned: !!xml_unsigned, has_xml_signed: !!xml_signed, has_response: !!response_xml };
+};
 
-r.get('/documents/:id/xml', requirePerm('reports.view', 'settings.manage', 'pos.sell'), ah(async (req, res) => {
+/** Document detail: lifecycle history, e-mails, related notes. */
+r.get('/documents/:id', requirePerm('reports.view', 'settings.manage', 'accounting.view', 'pos.sell'), ah(async (req, res) => {
   const d = await loadDoc(req);
-  const xml = req.query.kind === 'response' ? d.response_xml : d.xml_signed;
-  if (!xml) throw notFound(req.query.kind === 'response' ? 'Respuesta de Hacienda' : 'XML firmado');
+  const [events, emails, related, sale, store] = await Promise.all([
+    db.query(`SELECT * FROM e_document_events WHERE document_id=$1 ORDER BY created_at, kind`, [d.id]),
+    db.query(`SELECT * FROM e_document_emails WHERE document_id=$1 ORDER BY created_at DESC`, [d.id]),
+    db.query(`SELECT id, doc_type, consecutivo, status, issued_at, total, currency, reference FROM e_documents WHERE business_id=$1 AND (reference->>'doc_id'=$2 OR id=$3 OR replaced_by=$2::uuid)`,
+      [d.business_id, d.id, d.reference?.doc_id || d.replaced_by || d.annulled_by || '00000000-0000-0000-0000-000000000000']),
+    d.sale_id ? db.one(`SELECT id, receipt_no, total, created_at FROM sales WHERE id=$1`, [d.sale_id]) : null,
+    db.one(`SELECT name, hacienda_branch FROM stores WHERE id=$1`, [d.store_id]),
+  ]);
+  res.json({ ...publicDoc(d), events, emails, related: related.filter((x) => x.id !== d.id), sale, store });
+}));
+
+r.get('/documents/:id/status', requirePerm('reports.view', 'settings.manage', 'accounting.view', 'pos.sell'), ah(async (req, res) => {
+  const d = await loadDoc(req);
+  res.json({ id: d.id, clave: d.clave, consecutivo: d.consecutivo, status: d.status, message: d.message, submitted_at: d.submitted_at, decided_at: d.decided_at, ambiguous: d.ambiguous, attempts: d.attempts });
+}));
+
+/** XML artifacts: kind=signed (default) | unsigned | response */
+r.get('/documents/:id/xml', requirePerm('reports.view', 'settings.manage', 'accounting.view', 'pos.sell'), ah(async (req, res) => {
+  const d = await loadDoc(req);
+  const kind = String(req.query.kind || 'signed');
+  const xml = kind === 'response' ? d.response_xml : kind === 'unsigned' ? d.xml_unsigned : d.xml_signed;
+  if (!xml) throw notFound(kind === 'response' ? 'Respuesta de Hacienda' : kind === 'unsigned' ? 'XML original' : 'XML firmado');
+  await audit(req, 'hacienda_download_xml', 'e_documents', d.id, { kind });
   res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${d.clave}${req.query.kind === 'response' ? '_respuesta' : ''}.xml"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${d.clave}${kind === 'response' ? '_respuesta' : kind === 'unsigned' ? '_sin_firma' : ''}.xml"`);
   res.send(xml);
 }));
 
-/** Retry a document that failed before Hacienda accepted it (rebuilds the XML with the current product/settings data). */
-r.post('/documents/:id/retry', requirePerm('settings.manage', 'reports.view'), ah(async (req, res) => {
+/** Create the electronic document of a POS sale that has none (e.g. sold before e-invoicing was enabled). Idempotent per sale. */
+r.post('/documents', requirePerm('settings.manage', 'pos.sell'), ah(async (req, res) => {
+  const b = req.body || {};
+  const bid = req.auth.businessId;
+  const sale = await db.one(`SELECT * FROM sales WHERE id=$1 AND business_id=$2`, [b.sale_id, bid]);
+  if (!sale) throw notFound('Venta');
+  if (sale.type !== 'sale') throw bad('Las devoluciones generan su nota de crédito automáticamente');
+  const docType: DocType = b.doc_type === '01' ? '01' : '04';
+  const receptor = docType === '01' ? cleanReceptor(b.receptor || {}) : b.receptor?.nombre ? cleanReceptor(b.receptor, false) : null;
+  const doc = await tx(async (q) => {
+    const cur = await q.one(`SELECT * FROM e_documents WHERE sale_id=$1 AND doc_type IN ('01','04') AND status <> 'rejected' AND replaced_by IS NULL`, [sale.id]);
+    if (cur) return cur;
+    const d = await issueDocument(q, { businessId: bid, storeId: sale.store_id, saleId: sale.id, docType, issuedAt: new Date(), receptor, userId: req.auth.userId, userName: req.auth.userName, idempotencyKey: `sale:${sale.id}` });
+    if (!d) throw bad('La facturación electrónica no está activada');
+    return d;
+  });
+  await audit(req, 'hacienda_document_create', 'e_documents', doc.id, { sale: sale.receipt_no, clave: doc.clave });
+  kickQueue();
+  res.status(201).json(publicDoc(doc));
+}));
+
+/**
+ * Retry after the cause was fixed. Documents never received by Hacienda are rebuilt (validation errors, refused at
+ * reception); documents that may have been received are only re-checked (reconciliation), never re-signed.
+ */
+r.post('/documents/:id/retry', requirePerm('settings.manage', 'reports.view', 'accounting.manage'), ah(async (req, res) => {
   const d = await loadDoc(req);
   if (d.status === 'accepted') throw bad('El documento ya fue aceptado por Hacienda');
   if (d.status === 'rejected') throw bad('Un documento rechazado no se puede reenviar: use "Reemitir"');
-  await db.query(`UPDATE e_documents SET status=CASE WHEN status='sent' THEN 'sent' ELSE 'pending' END, xml_signed=CASE WHEN status='sent' THEN xml_signed ELSE NULL END,
-    attempts=0, next_attempt_at=now(), message=NULL, updated_at=now() WHERE id=$1`, [d.id]);
-  await audit(req, 'hacienda_retry', 'e_documents', d.id, { clave: d.clave });
+  let next: Record<string, any>;
+  if (d.status === 'validation_failed' || (d.status === 'error' && !d.submitted_at) || (d.status === 'pending' && !d.submitted_at)) {
+    next = { status: 'pending', xml_signed: null, xml_unsigned: null, xml_hash: null, signed_hash: null };
+  } else if (d.status === 'manual_review') {
+    next = { status: 'sent', ambiguous: true }; // ask Hacienda again before deciding anything
+  } else if (d.status === 'auth_error') {
+    next = { status: d.submitted_at ? 'sent' : d.xml_signed ? 'signed' : 'pending' };
+  } else next = {}; // signed / sent / processing: just check now
+  const keys = Object.keys(next);
+  await db.query(`UPDATE e_documents SET ${keys.map((k, i) => `${k}=$${i + 2}, `).join('')}attempts=0, next_attempt_at=now(), message=NULL, updated_at=now() WHERE id=$1`, [d.id, ...keys.map((k) => next[k])]);
+  await logEvent(d, 'retry', { status: next.status || d.status, message: 'Reintento solicitado', userId: req.auth.userId, userName: req.auth.userName });
+  await audit(req, 'hacienda_retry', 'e_documents', d.id, { clave: d.clave, from: d.status });
   await processQueue();
   res.json(await db.one(`SELECT id, status, message FROM e_documents WHERE id=$1`, [d.id]));
 }));
 
-/** Issue a new document (new consecutivo/clave) for one that Hacienda rejected. */
+/** Issue a new document (new consecutivo/clave) for one that Hacienda rejected or refused. */
 r.post('/documents/:id/reissue', requirePerm('settings.manage'), ah(async (req, res) => {
   const d = await loadDoc(req);
-  if (d.status !== 'rejected' && d.status !== 'error') throw bad('Solo se reemiten documentos rechazados o con error');
+  if (!['rejected', 'error', 'validation_failed'].includes(d.status)) throw bad('Solo se reemiten documentos rechazados, con error o que no pasaron la validación');
   const nd = await tx(async (q) => {
     const n = await issueDocument(q, {
       businessId: d.business_id, storeId: d.store_id, saleId: d.sale_id, docType: d.doc_type, issuedAt: new Date(), receptor: d.receptor,
-      reference: d.reference, userId: req.auth.userId, source: d.source, payload: d.payload, currency: d.currency, exchangeRate: Number(d.exchange_rate),
+      reference: d.reference, userId: req.auth.userId, userName: req.auth.userName, source: d.source, payload: d.payload, currency: d.currency, exchangeRate: Number(d.exchange_rate),
       externalRef: d.external_ref, notes: d.notes,
     });
     if (!n) throw bad('La facturación electrónica no está activada');
-    await q.query(`UPDATE e_documents SET replaced_by=$2, status=CASE WHEN status='error' THEN 'rejected' ELSE status END, updated_at=now() WHERE id=$1`, [d.id, n.id]);
+    await q.query(`UPDATE e_documents SET replaced_by=$2, status=CASE WHEN status IN ('error','validation_failed') THEN 'rejected' ELSE status END, updated_at=now() WHERE id=$1`, [d.id, n.id]);
     return n;
   });
+  await logEvent(d, 'note', { status: 'rejected', message: `Reemitido como ${nd.consecutivo}`, userId: req.auth.userId, userName: req.auth.userName });
   await audit(req, 'hacienda_reissue', 'e_documents', nd.id, { replaces: d.clave });
   kickQueue();
   res.status(201).json(nd);
 }));
 
-r.get('/documents/:id/pdf', requirePerm('reports.view', 'settings.manage', 'pos.sell'), ah(async (req, res) => {
+/** PDF: format=a4 (default) | 80mm | 58mm */
+r.get('/documents/:id/pdf', requirePerm('reports.view', 'settings.manage', 'accounting.view', 'pos.sell'), ah(async (req, res) => {
   const d = await loadDoc(req);
-  const pdf = await documentPdf(d);
+  const fmt = String(req.query.format || 'a4');
+  const pdf = fmt === '80mm' || fmt === '58mm' ? await documentThermalPdf(d, fmt) : await documentPdf(d);
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${d.consecutivo}.pdf"`);
+  res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${d.consecutivo}${fmt !== 'a4' ? '_' + fmt : ''}.pdf"`);
   res.send(pdf);
 }));
 
 /** Anular a manual / Cloudbeds document (full nota de crédito). */
-r.post('/documents/:id/annul', requirePerm('settings.manage', 'pos.refund'), ah(async (req, res) => {
+r.post('/documents/:id/annul', ADJUST, ah(async (req, res) => {
   const reason = String(req.body?.reason || '').trim();
   if (reason.length < 5) throw bad('Indique el motivo de la anulación');
   const nc = await tx((q) => annulDocument(q, { businessId: req.auth.businessId, docId: req.params.id, reason, userId: req.auth.userId }));
@@ -228,9 +300,24 @@ r.post('/documents/:id/annul', requirePerm('settings.manage', 'pos.refund'), ah(
   res.status(201).json(nc);
 }));
 
-r.post('/documents/:id/email', requirePerm('pos.sell', 'reports.view'), ah(async (req, res) => {
+/** Credit note (full or partial) / debit note referencing an original document. */
+const noteRoute = (type: '02' | '03') => ah(async (req: any, res: any) => {
+  const b = req.body || {};
+  const note = await tx((q) => createAdjustmentNote(q, {
+    businessId: req.auth.businessId, docId: String(b.document_id || b.doc_id || ''), type, reason: b.reason, lines: b.lines || null, code: b.code || null,
+    userId: req.auth.userId, userName: req.auth.userName,
+  }));
+  await audit(req, type === '03' ? 'hacienda_credit_note' : 'hacienda_debit_note', 'e_documents', note.id, { original: b.document_id || b.doc_id, reason: b.reason, clave: note.clave });
+  kickQueue();
+  res.status(201).json(note);
+});
+r.post('/credit-notes', ADJUST, noteRoute('03'));
+r.post('/debit-notes', ADJUST, noteRoute('02'));
+
+/** Resend the e-mail (never changes the Hacienda status). */
+r.post('/documents/:id/email', requirePerm('pos.sell', 'reports.view', 'accounting.view'), ah(async (req, res) => {
   const d = await loadDoc(req);
-  await emailDocument(d.id, req.body?.email || undefined);
+  await emailDocument(d.id, req.body?.email || undefined, req.auth.userId);
   res.json({ ok: true });
 }));
 
@@ -255,7 +342,6 @@ r.post('/sales/:id/factura', requireUser, requirePerm('pos.sell'), ah(async (req
 
 // ---------------------------------------------------------------- Manual invoices (not from the POS)
 
-const TAX_RATES = [0, 0.5, 1, 2, 4, 8, 13];
 r.post('/invoices', requirePerm('settings.manage', 'pos.sell'), ah(async (req, res) => {
   const b = req.body || {};
   const bid = req.auth.businessId;
@@ -263,22 +349,7 @@ r.post('/invoices', requirePerm('settings.manage', 'pos.sell'), ah(async (req, r
   const currency = b.currency === 'USD' ? 'USD' : 'CRC';
   const s = await getSettings(db, bid);
   if (!s?.enabled) throw bad('La facturación electrónica no está activada (Hacienda → Configuración)');
-  const rawLines: any[] = Array.isArray(b.lines) ? b.lines : [];
-  if (!rawLines.length) throw bad('Agregue al menos una línea');
-  if (rawLines.length > 1000) throw bad('Máximo 1000 líneas');
-  const lines: DocPayload['lines'] = rawLines.map((l, i) => {
-    const n = i + 1;
-    const qty = Number(l.qty), price = Number(l.price), discount = Number(l.discount) || 0, tax_rate = Number(l.tax_rate ?? 13);
-    const name = String(l.name || '').trim();
-    const cabys = digits(l.cabys) || digits(s.default_cabys);
-    if (name.length < 3) throw bad(`Línea ${n}: descripción requerida`);
-    if (!(qty > 0)) throw bad(`Línea ${n}: cantidad inválida`);
-    if (!(price >= 0)) throw bad(`Línea ${n}: precio inválido`);
-    if (discount < 0 || discount > qty * price) throw bad(`Línea ${n}: descuento inválido`);
-    if (!TAX_RATES.includes(tax_rate)) throw bad(`Línea ${n}: tarifa de IVA inválida`);
-    if (!/^\d{13}$/.test(cabys)) throw bad(`Línea ${n}: código CABYS requerido (13 dígitos)`);
-    return { qty, price, discount, tax_rate, name: name.slice(0, 200), cabys, unit: String(l.unit || 'Unid').slice(0, 10), code: l.code ? String(l.code).slice(0, 20) : null };
-  });
+  const lines: DocPayload['lines'] = cleanLines(b.lines, s);
   const receptor = docType === '01' ? cleanReceptor(b.receptor || {}) : b.receptor?.nombre ? cleanReceptor(b.receptor, false) : null;
   const condition = String(b.condition || '01');
   if (!['01', '02', '03', '04', '05', '06', '07', '08', '10', '99'].includes(condition)) throw bad('Condición de venta inválida');
@@ -290,7 +361,8 @@ r.post('/invoices', requirePerm('settings.manage', 'pos.sell'), ah(async (req, r
   const storeId = b.store_id || req.storeId || (await db.one(`SELECT id FROM stores WHERE business_id=$1 ORDER BY created_at LIMIT 1`, [bid]))!.id;
   const doc = await tx(async (q) => {
     const d = await issueDocument(q, {
-      businessId: bid, storeId, docType, issuedAt: new Date(), userId: req.auth.userId, source: 'manual', receptor, currency, exchangeRate: rate,
+      businessId: bid, storeId, docType, issuedAt: new Date(), userId: req.auth.userId, userName: req.auth.userName, source: 'manual',
+      idempotencyKey: b.idempotency_key ? `manual:${String(b.idempotency_key).slice(0, 80)}` : null, receptor, currency, exchangeRate: rate,
       notes: b.notes ? String(b.notes).slice(0, 500) : null,
       payload: { lines, payments, condition, credit_days: creditDays, service_charge: Number(b.service_charge) || 0, tip: Number(b.tip) || 0 },
     });
@@ -351,6 +423,9 @@ r.get('/cabys', ah(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const codigo = digits(req.query.codigo);
   if (!q && !codigo) return res.json({ items: [] });
+  // Official catalogue imported → search it locally (versioned, works offline)
+  const local = await searchLocal(q, codigo || undefined);
+  if (local) return res.json({ items: local.map((x: any) => ({ ...x, impuesto: x.impuesto == null ? null : Number(x.impuesto) })), total: local.length, source: 'catalogue' });
   const key = codigo ? 'c:' + codigo : 'q:' + q.toLowerCase();
   const hit = cabysCache.get(key);
   if (hit && Date.now() - hit.at < 24 * 3600 * 1000) return res.json(hit.data);
@@ -453,6 +528,153 @@ r.get('/received/:id/xml', requirePerm('reports.view', 'settings.manage', 'purch
   res.setHeader('Content-Type', 'application/xml; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${d.clave}${req.query.kind ? '_' + req.query.kind : ''}.xml"`);
   res.send(xml);
+}));
+
+// ---------------------------------------------------------------- Dashboard & reports (PRD §11)
+
+const crcExpr = `COALESCE(d.total,0) * CASE WHEN d.currency='USD' THEN d.exchange_rate ELSE 1 END * CASE WHEN d.doc_type='03' THEN -1 ELSE 1 END`;
+
+r.get('/dashboard', VIEW_DOCS, ah(async (req, res) => {
+  const bid = req.auth.businessId;
+  const { from, to } = range(req);
+  const [byStatus, byType, trend, queue, last, s] = await Promise.all([
+    db.query(`SELECT status, count(*)::int AS n FROM e_documents d WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 GROUP BY status`, [bid, from, to]),
+    db.query(`SELECT doc_type, count(*)::int AS n, COALESCE(SUM(${crcExpr}),0) AS total_crc FROM e_documents d WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 AND status <> 'rejected' GROUP BY doc_type`, [bid, from, to]),
+    db.query(`SELECT to_char(created_at - interval '6 hours','YYYY-MM-DD') AS day, kind, count(*)::int AS n FROM e_document_events
+               WHERE business_id=$1 AND created_at >= now() - interval '14 days' AND kind IN ('validation_failed','error','rejected','auth_error','manual_review','accepted') GROUP BY 1,2 ORDER BY 1`, [bid]),
+    db.one(`SELECT count(*)::int AS n, min(created_at) AS oldest FROM e_documents WHERE business_id=$1 AND status = ANY($2::text[])`, [bid, ['pending', 'signed', 'sent', 'processing', 'auth_error']]),
+    db.one(`SELECT max(decided_at) AS last_accepted FROM e_documents WHERE business_id=$1 AND status='accepted'`, [bid]),
+    getSettings(db, bid),
+  ]);
+  const taxes = await taxSummary(bid, from, to);
+  const lastAuth = await db.one(`SELECT kind, created_at FROM e_document_events WHERE business_id=$1 AND kind IN ('auth_error','submit','accepted') ORDER BY created_at DESC LIMIT 1`, [bid]);
+  const certDays = s?.cert_expires_at ? Math.floor((new Date(s.cert_expires_at).getTime() - Date.now()) / 86400000) : null;
+  res.json({
+    from, to,
+    by_status: Object.fromEntries(byStatus.map((x) => [x.status, Number(x.n)])),
+    by_type: byType.map((x) => ({ doc_type: x.doc_type, name: DOC_NAMES[x.doc_type as DocType], count: Number(x.n), total_crc: Math.round(Number(x.total_crc) * 100) / 100 })),
+    taxes, trend,
+    health: {
+      enabled: !!s?.enabled, environment: s?.environment || 'stag', queue: Number(queue?.n || 0), oldest_in_queue: queue?.oldest || null,
+      last_accepted: last?.last_accepted || null, credentials_ok: lastAuth ? lastAuth.kind !== 'auth_error' : null,
+      certificate_days_left: certDays, certificate_expires_at: s?.cert_expires_at || null,
+    },
+  });
+}));
+
+/** Tax summary by IVA rate from the document XML snapshots (colones). */
+async function taxSummary(bid: string, from: string, to: string, storeId?: string | null) {
+  const docs = await db.query(
+    `SELECT id, doc_type, xml_signed, xml_unsigned FROM e_documents WHERE business_id=$1 AND issued_at >= $2 AND issued_at < $3 AND status NOT IN ('rejected','validation_failed')
+       AND ($4::uuid IS NULL OR store_id=$4) AND (xml_signed IS NOT NULL OR xml_unsigned IS NOT NULL)`, [bid, from, to, storeId || null]);
+  const rates: Record<string, { rate: number; base: number; tax: number; lines: number }> = {};
+  let exempt = 0, otros = 0, total = 0;
+  for (const d of docs) {
+    let p;
+    try { p = parseComprobante(d.xml_signed || d.xml_unsigned); } catch { continue; }
+    const k = (['03'].includes(d.doc_type) ? -1 : 1) * (p.tipoCambio || 1);
+    for (const l of p.lines) {
+      if (l.tarifa > 0) {
+        const x = (rates[l.tarifa] ||= { rate: l.tarifa, base: 0, tax: 0, lines: 0 });
+        x.base += l.subTotal * k; x.tax += l.impuesto * k; x.lines++;
+      } else exempt += l.subTotal * k;
+    }
+    otros += p.resumen.otros * k;
+    total += p.resumen.total * k;
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    documents: docs.length,
+    rates: Object.values(rates).map((x) => ({ rate: x.rate, base: r2(x.base), tax: r2(x.tax), lines: x.lines })).sort((a, b) => b.rate - a.rate),
+    exempt: r2(exempt), other_charges: r2(otros), total: r2(total), total_tax: r2(Object.values(rates).reduce((s, x) => s + x.tax, 0)),
+  };
+}
+
+/** Electronic sales report grouped by day or month, document type, branch and status. */
+r.get('/reports/sales', VIEW_DOCS, ah(async (req, res) => {
+  const { from, to } = range(req);
+  const g = req.query.group === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD';
+  const params: any[] = [req.auth.businessId, from, to];
+  let where = 'd.business_id=$1 AND d.issued_at >= $2 AND d.issued_at < $3';
+  if (req.query.store_id) where += ` AND d.store_id=$${params.push(req.query.store_id)}`;
+  if (req.query.doc_type) where += ` AND d.doc_type=$${params.push(req.query.doc_type)}`;
+  if (req.query.status) where += ` AND d.status=$${params.push(req.query.status)}`;
+  const rows = await db.query(
+    `SELECT to_char(d.issued_at - interval '6 hours', '${g}') AS period, d.doc_type, st.name AS branch, d.status, d.currency, count(*)::int AS documents,
+        COALESCE(SUM(d.total),0) AS total, COALESCE(SUM(${crcExpr}),0) AS total_crc
+       FROM e_documents d JOIN stores st ON st.id=d.store_id WHERE ${where} GROUP BY 1,2,3,4,5 ORDER BY 1 DESC, 2`, params);
+  res.json(rows.map((x) => ({ ...x, doc_name: DOC_NAMES[x.doc_type as DocType], total: Math.round(Number(x.total) * 100) / 100, total_crc: Math.round(Number(x.total_crc) * 100) / 100 })));
+}));
+
+r.get('/reports/taxes', VIEW_DOCS, ah(async (req, res) => {
+  const { from, to } = range(req);
+  res.json(await taxSummary(req.auth.businessId, from, to, (req.query.store_id as string) || null));
+}));
+
+/** Submission errors and rejections (with Hacienda's message). */
+r.get('/reports/errors', VIEW_DOCS, ah(async (req, res) => {
+  const { from, to } = range(req);
+  res.json(await db.query(
+    `SELECT e.created_at, e.kind, e.http_status, e.message, d.id AS document_id, d.doc_type, d.consecutivo, d.status
+       FROM e_document_events e JOIN e_documents d ON d.id=e.document_id
+      WHERE e.business_id=$1 AND e.created_at >= $2 AND e.created_at < $3 AND (e.kind IN ('validation_failed','error','rejected','auth_error','manual_review') OR (e.kind='submit' AND e.http_status >= 400))
+      ORDER BY e.created_at DESC LIMIT 1000`, [req.auth.businessId, from, to]));
+}));
+
+// ---------------------------------------------------------------- CABYS catalogue & product mapping (PRD §5.3)
+
+r.get('/cabys/catalogue', ah(async (_req, res) => res.json(await catalogueInfo())));
+r.post('/cabys/import', requirePerm('settings.manage'), ah(async (req, res) => {
+  const f = req.body?.file;
+  if (!f?.content) throw bad('Seleccione el archivo del catálogo CABYS (Excel o CSV)');
+  const out = await importCabys(f, req.body?.version, req.auth.userId ?? null);
+  await audit(req, 'cabys_import', 'cabys_versions', null, out);
+  res.json(out);
+}));
+r.get('/cabys/products', requirePerm('products.manage', 'settings.manage', 'reports.view'), ah(async (req, res) => res.json(await mappingReport(req.auth.businessId))));
+export const assignCabysHandler = ah(async (req: any, res: any) => {
+  const out = await assignProductCabys(req.auth.businessId, req.params.id, req.body?.cabys ?? null, req.body?.unit ?? null, { id: req.auth.userId ?? null, name: req.auth.userName ?? null });
+  await audit(req, 'product_cabys', 'products', req.params.id, out);
+  res.json(out);
+});
+r.put('/products/:id/cabys', requirePerm('products.manage', 'settings.manage'), assignCabysHandler);
+r.get('/products/:id/cabys-history', requirePerm('products.manage', 'settings.manage'), ah(async (req, res) => {
+  res.json(await db.query(`SELECT * FROM product_cabys_history WHERE business_id=$1 AND product_id=$2 ORDER BY created_at DESC`, [req.auth.businessId, req.params.id]));
+}));
+
+// ---------------------------------------------------------------- Branches (sucursales) & terminals (PRD §5.1)
+
+r.get('/branches', requirePerm('settings.manage'), ah(async (req, res) => {
+  const bid = req.auth.businessId;
+  res.json({
+    stores: await db.query(`SELECT id, name, hacienda_branch, hacienda_activity FROM stores WHERE business_id=$1 ORDER BY created_at`, [bid]),
+    devices: await db.query(`SELECT id, name, store_id, kind, active, hacienda_terminal, last_seen_at FROM pos_devices WHERE business_id=$1 AND kind='pos' ORDER BY created_at`, [bid]),
+  });
+}));
+r.put('/branches/:id', requirePerm('settings.manage'), ah(async (req, res) => {
+  const bid = req.auth.businessId;
+  const branch = req.body?.hacienda_branch ? digits(req.body.hacienda_branch).padStart(3, '0') : null;
+  const activity = req.body?.hacienda_activity ? digits(req.body.hacienda_activity) : null;
+  if (branch && (branch.length !== 3 || branch === '000')) throw bad('La sucursal debe ser un número de 3 dígitos (001–999)');
+  if (activity && activity.length !== 6) throw bad('La actividad económica debe tener 6 dígitos');
+  if (branch && (await db.one(`SELECT 1 FROM stores WHERE business_id=$1 AND hacienda_branch=$2 AND id<>$3`, [bid, branch, req.params.id]))) throw bad(`La sucursal ${branch} ya está asignada a otro local`);
+  const used = await db.one(`SELECT hacienda_branch FROM stores WHERE id=$1 AND business_id=$2`, [req.params.id, bid]);
+  if (!used) throw notFound('Local');
+  if (used.hacienda_branch && branch !== used.hacienda_branch && (await db.one(`SELECT 1 FROM e_documents WHERE store_id=$1 LIMIT 1`, [req.params.id]))) throw bad('Este local ya emitió comprobantes: cambiar su sucursal cambiaría la numeración. Cree un local nuevo si abre otra sucursal.');
+  await db.query(`UPDATE stores SET hacienda_branch=COALESCE($2, hacienda_branch), hacienda_activity=$3 WHERE id=$1`, [req.params.id, branch, activity]);
+  await audit(req, 'hacienda_branch', 'stores', req.params.id, { branch, activity });
+  res.json({ ok: true });
+}));
+r.put('/terminals/:id', requirePerm('settings.manage'), ah(async (req, res) => {
+  const bid = req.auth.businessId;
+  const t = req.body?.hacienda_terminal ? digits(req.body.hacienda_terminal).padStart(5, '0') : null;
+  if (t && (t.length !== 5 || t === '00000')) throw bad('La terminal debe ser un número de hasta 5 dígitos');
+  const dev = await db.one(`SELECT * FROM pos_devices WHERE id=$1 AND business_id=$2`, [req.params.id, bid]);
+  if (!dev) throw notFound('Dispositivo');
+  if (t && (await db.one(`SELECT 1 FROM pos_devices WHERE business_id=$1 AND store_id=$2 AND hacienda_terminal=$3 AND id<>$4`, [bid, dev.store_id, t, dev.id]))) throw bad(`La terminal ${t} ya está asignada a otro dispositivo de este local`);
+  await db.query(`UPDATE pos_devices SET hacienda_terminal=$2 WHERE id=$1`, [dev.id, t]);
+  await audit(req, 'hacienda_terminal', 'pos_devices', dev.id, { terminal: t });
+  res.json({ ok: true });
 }));
 
 /** Labels for the UI. */

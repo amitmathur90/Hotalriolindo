@@ -34,7 +34,7 @@ const LABELS = {
 export const receiptLabels = (business: any) => (String(business?.locale || '').startsWith('es') ? LABELS.es : LABELS.en);
 
 // Costa Rica electronic documents (Hacienda v4.4)
-export const EDOC_NAMES: Record<string, string> = { '01': 'Factura electrónica', '03': 'Nota de crédito electrónica', '04': 'Tiquete electrónico' };
+export const EDOC_NAMES: Record<string, string> = { '01': 'Factura electrónica', '02': 'Nota de débito electrónica', '03': 'Nota de crédito electrónica', '04': 'Tiquete electrónico' };
 export const ID_TYPE_LABELS: Record<string, string> = { '01': 'Cédula física', '02': 'Cédula jurídica', '03': 'DIMEX', '04': 'NITE', '05': 'Extranjero', '06': 'No contribuyente' };
 /** The electronic document a receipt represents: the sale's tiquete/factura, or the refund's nota de crédito. */
 export function receiptEDoc(sale: any) {

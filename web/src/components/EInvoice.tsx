@@ -56,12 +56,18 @@ export function ReceptorForm({ value, onChange }: { value: ReceptorInput; onChan
 }
 
 const STATUS: Record<string, [string, 'green' | 'amber' | 'red' | 'slate' | 'blue']> = {
-  pending: ['Pendiente', 'amber'],
+  pending: ['En cola', 'amber'],
+  validation_failed: ['Validación fallida', 'red'],
+  signed: ['Firmado', 'blue'],
   sent: ['Enviado', 'blue'],
+  processing: ['Procesando', 'blue'],
   accepted: ['Aceptado', 'green'],
   rejected: ['Rechazado', 'red'],
-  error: ['Error', 'red'],
+  error: ['Error de envío', 'red'],
+  auth_error: ['Error de credenciales', 'red'],
+  manual_review: ['Revisión manual', 'amber'],
 };
+export const EDOC_STATUS = STATUS;
 export const EDocStatus = ({ status }: { status: string }) => {
   const [l, c] = STATUS[status] || [status, 'slate'];
   return <Badge color={c as any}>{l}</Badge>;

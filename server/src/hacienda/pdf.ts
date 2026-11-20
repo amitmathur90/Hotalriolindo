@@ -311,3 +311,82 @@ export async function documentPdf(d: any): Promise<Buffer> {
     footerNote: d.replaced_by ? 'Documento sustituido por factura electrónica' : d.annulled_by ? 'Documento anulado mediante nota de crédito' : null,
   });
 }
+
+const STATUS_TEXT: Record<string, string> = { accepted: 'ACEPTADO POR HACIENDA', rejected: 'RECHAZADO', pending: 'PENDIENTE DE ENVÍO', signed: 'PENDIENTE DE ENVÍO', sent: 'EN PROCESO', processing: 'EN PROCESO' };
+
+/** 80 mm / 58 mm thermal receipt of a comprobante (PDF to send to a receipt printer). */
+export async function renderThermal(p: ParsedDoc, o: PdfOptions & { width: '80mm' | '58mm' }) {
+  const W = o.width === '58mm' ? 164 : 226; // points (58 mm / 80 mm paper)
+  const M = 8, CW = W - 2 * M;
+  const fs = o.width === '58mm' ? 6.5 : 7.5;
+  // measure height first with a scratch document
+  const draw = async (doc: PDFKit.PDFDocument) => {
+    const cur = p.moneda;
+    const center = (t: string, size = fs, bold = false) => doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).text(t, M, doc.y, { width: CW, align: 'center' });
+    const lr = (l: string, r: string, bold = false) => {
+      const y = doc.y;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fs).text(l, M, y, { width: CW * 0.6 });
+      const y2 = doc.y;
+      doc.text(r, M, y, { width: CW, align: 'right' });
+      doc.y = Math.max(y2, doc.y);
+    };
+    const hr = () => { doc.moveTo(M, doc.y + 2).lineTo(W - M, doc.y + 2).dash(1.5, { space: 1.5 }).strokeColor('#000').lineWidth(0.5).stroke().undash(); doc.y += 5; };
+    doc.y = M;
+    if (o.environment === 'stag') center('*** PRUEBAS - SIN VALIDEZ FISCAL ***', fs, true);
+    center(p.emisor.comercial || p.emisor.nombre, fs + 2, true);
+    if (p.emisor.comercial) center(p.emisor.nombre);
+    center(`${ID_LABEL[p.emisor.idType] || 'Céd.'} ${p.emisor.id}`);
+    if (p.emisor.phone) center(`Tel ${p.emisor.phone}`);
+    if (p.emisor.address) center(p.emisor.address, fs - 0.5);
+    hr();
+    center(p.title.toUpperCase(), fs + 1, true);
+    center(`N° ${p.consecutivo}`, fs, true);
+    center(fmtDate(p.fecha));
+    if (p.receptor?.nombre) { hr(); doc.font('Helvetica').fontSize(fs).text(`Cliente: ${p.receptor.nombre}`, M, doc.y, { width: CW }); if (p.receptor.id) doc.text(`${ID_LABEL[p.receptor.idType] || 'ID'}: ${p.receptor.id}`, M, doc.y, { width: CW }); }
+    hr();
+    for (const l of p.lines) {
+      doc.font('Helvetica').fontSize(fs).text(`${fmtQty(l.cantidad)} x ${l.detalle}`, M, doc.y, { width: CW });
+      lr(`   ${fmt(l.precio, cur)}${l.tarifa ? `  IVA ${l.tarifa}%` : '  Exento'}`, fmt(l.total, cur));
+      if (l.descuento) lr('   Descuento', '-' + fmt(l.descuento, cur));
+    }
+    hr();
+    lr('Subtotal', fmt(p.resumen.totalVenta, cur));
+    if (p.resumen.descuentos) lr('Descuentos', '-' + fmt(p.resumen.descuentos, cur));
+    lr('IVA', fmt(p.resumen.impuesto, cur));
+    for (const c of p.otros) lr(c.detalle || 'Otro cargo', fmt(c.monto, cur));
+    lr('TOTAL', fmt(p.resumen.total, cur), true);
+    doc.font('Helvetica-Oblique').fontSize(fs - 1).text(amountInWords(p.resumen.total, cur), M, doc.y, { width: CW });
+    const medios = (p.medios.length ? p.medios : p.medioLegacy).map((m) => MEDIO[m.code] || m.code);
+    doc.font('Helvetica').fontSize(fs).text(`${CONDICION[p.condicion] || ''} · ${[...new Set(medios)].join(', ')}${cur !== 'CRC' ? ` · T/C ${p.tipoCambio.toFixed(2)}` : ''}`, M, doc.y, { width: CW });
+    for (const r of p.referencias) doc.fontSize(fs - 1).text(`Ref. ${REF_CODE[r.codigo] || r.codigo}: ${r.numero}`, M, doc.y, { width: CW });
+    for (const n of p.notas) doc.fontSize(fs - 1).text(n, M, doc.y, { width: CW });
+    hr();
+    center('Clave numérica', fs - 1, true);
+    center(p.clave.replace(/(.{25})/, '$1 '), fs - 1.5);
+    if (o.status && STATUS_TEXT[o.status]) center(STATUS_TEXT[o.status], fs, true);
+    const qrData = o.qrUrl || p.clave;
+    const png = await QRCode.toBuffer(qrData, { margin: 0, width: 200 });
+    const qs = o.width === '58mm' ? 80 : 100;
+    doc.image(png, (W - qs) / 2, doc.y + 4, { width: qs });
+    doc.y += qs + 8;
+    if (o.resolution) center(o.resolution, fs - 1.5);
+    center('Versión del documento electrónico 4.4', fs - 1.5);
+    return doc.y + M;
+  };
+  const probe = new PDFDocument({ size: [W, 5000], margin: 0, autoFirstPage: true });
+  const height = await draw(probe);
+  probe.end();
+  const doc = new PDFDocument({ size: [W, Math.ceil(height)], margin: 0, info: { Title: `${p.title} ${p.consecutivo}`, Creator: APP_NAME } });
+  const chunks: Buffer[] = [];
+  doc.on('data', (c) => chunks.push(c));
+  const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
+  await draw(doc);
+  doc.end();
+  return done;
+}
+
+export async function documentThermalPdf(d: any, width: '80mm' | '58mm') {
+  const { documentXml } = await import('./service.ts');
+  const s = await db.one(`SELECT * FROM hacienda_settings WHERE business_id=$1`, [d.business_id]);
+  return renderThermal(parseComprobante(await documentXml(d)), { width, status: d.status, environment: d.environment, resolution: s?.resolution_text || null, qrUrl: publicPdfUrl(d.id) });
+}

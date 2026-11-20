@@ -6,6 +6,7 @@ export type Emisor = {
   nombre: string; id_type: string; id_number: string; nombre_comercial?: string | null;
   provincia: string; canton: string; distrito: string; barrio?: string | null; otras_senas: string;
   phone?: string | null; email: string;
+  registro_fiscal_8707?: string | null; // bebidas alcohólicas (Ley 8707)
 };
 export type Receptor = { nombre: string; id_type?: string | null; id_number?: string | null; email?: string | null; activity_code?: string | null };
 export type DocLine = {
@@ -66,6 +67,7 @@ export function buildXml(d: BuildInput): { xml: string; total: number } {
   const emisor =
     '<Emisor>' + el('Nombre', clip(e.nombre, 5, 100)) +
     '<Identificacion>' + el('Tipo', e.id_type) + el('Numero', idNumber(e.id_type, e.id_number)) + '</Identificacion>' +
+    (e.registro_fiscal_8707 && e.registro_fiscal_8707.trim() ? el('Registrofiscal8707', e.registro_fiscal_8707.trim().slice(0, 12)) : '') +
     (e.nombre_comercial && e.nombre_comercial.trim().length >= 3 ? el('NombreComercial', e.nombre_comercial.trim().slice(0, 80)) : '') +
     ubicacion(e) +
     (phone.length >= 3 ? '<Telefono>' + el('CodigoPais', '506') + el('NumTelefono', phone.slice(0, 20)) + '</Telefono>' : '') +
@@ -169,7 +171,7 @@ export function buildXml(d: BuildInput): { xml: string; total: number } {
       el('Codigo', r.code) + el('Razon', clip(r.reason, 1, 180)) + '</InformacionReferencia>',
     )
     .join('');
-  if (d.docType === '03' && !refs) throw new Error('La nota de crédito requiere un documento de referencia');
+  if ((d.docType === '03' || d.docType === '02') && !refs) throw new Error(`La nota de ${d.docType === '03' ? 'crédito' : 'débito'} requiere un documento de referencia`);
 
   const root = ROOT[d.docType];
   const xml =

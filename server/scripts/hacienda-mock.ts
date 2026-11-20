@@ -20,6 +20,8 @@ const dir = process.argv[3];
 if (dir) mkdirSync(dir, { recursive: true });
 const docs = new Map<string, { xml: string; polls: number; signatureValid: boolean; body: any }>();
 const qbPosts: any[] = [];
+const lost = new Set<string>();
+const slow = new Set<string>();
 
 const read = (req: http.IncomingMessage) => new Promise<string>((res) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => res(b)); });
 const send = (res: http.ServerResponse, status: number, body?: any, headers: Record<string, string> = {}) => {
@@ -142,12 +144,16 @@ http
       const key = body.consecutivoReceptor ? `${body.clave}-${body.consecutivoReceptor}` : body.clave;
       if (docs.has(key)) return send(res, 400, undefined, { 'X-Error-Cause': 'El comprobante ya fue recibido anteriormente' });
       const xml = Buffer.from(body.comprobanteXml, 'base64').toString('utf8');
+      // Test hooks: TIMEOUT = received but the answer comes too late; PERDIDO = first attempt is lost (not received) and times out
+      if (xml.includes('<Nombre>PERDIDO') && !lost.has(key)) { lost.add(key); await new Promise((r) => setTimeout(r, 4000)); return send(res, 504); }
+      if (xml.includes('<Nombre>TIMEOUT') && !slow.has(key)) { slow.add(key); setTimeout(() => send(res, 202), 4000); }
       const signatureValid = await verifyXml(xml).catch(() => false);
       docs.set(key, { xml, polls: 0, signatureValid, body });
       if (dir) {
         const kind = xml.includes('<FacturaElectronica') ? 'factura' : xml.includes('<NotaCreditoElectronica') ? 'nota-credito' : xml.includes('<MensajeReceptor') ? 'mensaje-receptor' : 'tiquete';
         writeFileSync(`${dir}/${kind}_${key}.xml`, xml);
       }
+      if (slow.has(key) && !res.headersSent && xml.includes('<Nombre>TIMEOUT')) return;
       return send(res, 202);
     }
     const m = /^\/recepcion\/v1\/recepcion\/(\d{50}(?:-\d{20})?)$/.exec(p);

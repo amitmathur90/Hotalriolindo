@@ -584,3 +584,66 @@ CREATE TABLE IF NOT EXISTS qb_postings (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, kind, ref)
 );
+
+-- ---------------------------------------------------------------- Hacienda PRD: audit trail, snapshots, terminals, CABYS catalogue
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS xml_unsigned text;          -- immutable snapshot of the generated XML (before signing)
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS xml_hash text;              -- sha256 of xml_unsigned
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS signed_hash text;           -- sha256 of xml_signed
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS schema_version text;        -- e.g. v4.4
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS rules_version text;         -- tax/document rules used by the engine
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS terminal text;              -- terminal (5) used in the consecutivo
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS submitted_at timestamptz;   -- first time Hacienda received it
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS decided_at timestamptz;     -- final answer (accepted / rejected)
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS ambiguous boolean NOT NULL DEFAULT false; -- send timed out: reconcile before resending
+ALTER TABLE e_documents ADD COLUMN IF NOT EXISTS idempotency_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS e_documents_idem_uq ON e_documents(business_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS e_documents_cons_uq ON e_documents(business_id, environment, consecutivo);
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS registro_fiscal_8707 text;  -- registro de bebidas alcohólicas (Ley 8707)
+ALTER TABLE hacienda_settings ADD COLUMN IF NOT EXISTS cert_alert_sent_at timestamptz;
+ALTER TABLE stores ADD COLUMN IF NOT EXISTS hacienda_activity text;          -- actividad económica of this branch (e.g. 561001 restaurant)
+ALTER TABLE pos_devices ADD COLUMN IF NOT EXISTS hacienda_terminal text;     -- terminal (5 digits) of this POS device
+ALTER TABLE products ADD COLUMN IF NOT EXISTS hacienda_unit text;            -- unidad de medida (Unid, Sp, kg, L…)
+
+-- Lifecycle history of every electronic document: validation, signing, each submission attempt, status checks, e-mails
+CREATE TABLE IF NOT EXISTS e_document_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id uuid NOT NULL,
+  business_id uuid NOT NULL,
+  kind text NOT NULL,                     -- created | validated | validation_failed | signed | submit | status | accepted | rejected | auth_error | reconcile | email | retry | note
+  status text,                            -- document status after the event
+  http_status integer,
+  message text,
+  detail jsonb,
+  created_by uuid, created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS e_document_events_doc_idx ON e_document_events(document_id, created_at);
+
+CREATE TABLE IF NOT EXISTS e_document_emails (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id uuid NOT NULL, business_id uuid NOT NULL,
+  recipient text NOT NULL, status text NOT NULL,   -- sent | failed
+  error text, attachments text[],
+  created_by uuid, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS e_document_emails_doc_idx ON e_document_emails(document_id);
+
+-- Official CABYS catalogue (imported from the BCCR / Hacienda file, versioned)
+CREATE TABLE IF NOT EXISTS cabys_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  version text NOT NULL, source text, codes integer NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true, imported_by uuid, imported_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS cabys_codes (
+  code text PRIMARY KEY, description text NOT NULL, tax_rate numeric, version text, active boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cabys_codes_desc_idx ON cabys_codes (lower(description));
+
+-- History of product ↔ CABYS assignments
+CREATE TABLE IF NOT EXISTS product_cabys_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL, product_id uuid NOT NULL,
+  old_code text, new_code text, old_unit text, new_unit text,
+  user_id uuid, user_name text, created_at timestamptz NOT NULL DEFAULT now()
+);

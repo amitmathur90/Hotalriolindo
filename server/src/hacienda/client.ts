@@ -22,7 +22,7 @@ const apiUrl = (env: HaciendaEnv) => (process.env.HACIENDA_API_URL || API[env]).
 const tokens = new Map<string, { token: string; exp: number }>();
 export const clearToken = (env: HaciendaEnv, username: string) => tokens.delete(`${env}:${username}`);
 
-async function request(url: string, init: RequestInit, timeoutMs = 30000) {
+async function request(url: string, init: RequestInit, timeoutMs = Number(process.env.HACIENDA_HTTP_TIMEOUT_MS || 30000)) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {

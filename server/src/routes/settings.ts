@@ -69,7 +69,9 @@ r.get('/backup', requirePerm('settings.manage'), ah(async (req, res) => {
   if (!req.auth.isOwner) throw new HttpError(403, 'Only the owner can export a backup');
   const bid = req.auth.businessId;
   const tables = ['stores', 'roles', 'categories', 'taxes', 'products', 'variants', 'modifier_groups', 'customers', 'suppliers', 'payment_methods',
-    'discounts', 'gift_cards', 'shifts', 'cash_movements', 'sales', 'purchase_orders', 'stock_movements', 'expenses', 'restaurant_tables', 'time_entries'];
+    'discounts', 'gift_cards', 'shifts', 'cash_movements', 'sales', 'purchase_orders', 'stock_movements', 'expenses', 'restaurant_tables', 'time_entries',
+    // electronic invoicing (documents, signed XML, Hacienda responses, history) and accounting must be kept for years
+    'e_documents', 'e_document_events', 'e_document_emails', 'received_documents', 'hacienda_sequences', 'acc_accounts', 'acc_entries', 'acc_lines', 'acc_open_items', 'acc_payments', 'acc_bank_lines'];
   const out: Record<string, any> = { exported_at: new Date().toISOString(), business: await db.one(`SELECT * FROM businesses WHERE id=$1`, [bid]) };
   for (const t of tables) out[t] = await db.query(`SELECT * FROM ${t} WHERE business_id=$1`, [bid]);
   out.sale_items = await db.query(`SELECT i.* FROM sale_items i JOIN sales s ON s.id=i.sale_id WHERE s.business_id=$1`, [bid]);

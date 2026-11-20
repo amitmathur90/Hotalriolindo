@@ -4,6 +4,9 @@ import { boApi, openFile } from '../../lib/api';
 import { CabysPicker } from '../../components/CabysPicker';
 import ManualInvoice, { fmtCur } from './hacienda/ManualInvoice';
 import Received from './hacienda/Received';
+import { Dashboard, Reports } from './hacienda/Overview';
+import DocumentDetail from './hacienda/DocumentDetail';
+import { Branches, CabysSetup } from './hacienda/Setup';
 import { dt, money } from '../../lib/format';
 import { Badge, Empty, Field, PageHeader, SearchInput, Spinner, Tabs, Toggle, useAsync, useToast } from '../../components/ui';
 import { SaleDetail } from '../../components/SaleDetail';
@@ -15,19 +18,20 @@ import { ExportButtons, useRange } from '../widgets';
 /** Costa Rica electronic invoicing (Ministerio de Hacienda, v4.4): documents and configuration. */
 export default function Hacienda() {
   const { can } = useSession();
-  const [tab, setTab] = useState<'docs' | 'new' | 'received' | 'config'>('docs');
+  const [tab, setTab] = useState<'dash' | 'docs' | 'new' | 'received' | 'reports' | 'config'>('docs');
   const [fx, setFx] = useState<any>(null);
   useEffect(() => { boApi('/hacienda/fx').then(setFx).catch(() => {}); }, []);
-  const tabs: { id: typeof tab; label: string }[] = [{ id: 'docs', label: 'Emitidos' }];
+  const tabs: { id: typeof tab; label: string }[] = [{ id: 'dash', label: 'Resumen' }, { id: 'docs', label: 'Emitidos' }];
   if (can('settings.manage') || can('pos.sell')) tabs.push({ id: 'new', label: 'Nueva factura' });
   if (can('settings.manage') || can('purchases.manage')) tabs.push({ id: 'received', label: 'Recibidos (proveedores)' });
+  tabs.push({ id: 'reports', label: 'Reportes' });
   if (can('settings.manage')) tabs.push({ id: 'config', label: 'Configuración' });
   return (
     <div>
       <PageHeader title="Hacienda · Facturación electrónica" subtitle="Tiquetes, facturas y notas de crédito electrónicas (versión 4.4)"
         actions={fx?.rate ? <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-sm dark:bg-slate-800" title={`Tipo de cambio de venta ${fx.date}${fx.source === 'manual' ? ' (fijo)' : ' · Hacienda/BCCR'}`}><DollarSign size={14} />T/C: <b>₡{Number(fx.rate).toFixed(2)}</b></span> : undefined} />
       {tabs.length > 1 && <div className="mb-4"><Tabs tabs={tabs} value={tab} onChange={setTab} /></div>}
-      {tab === 'docs' ? <Documents /> : tab === 'new' ? <ManualInvoice /> : tab === 'received' ? <Received /> : <Config />}
+      {tab === 'dash' ? <Dashboard /> : tab === 'docs' ? <Documents /> : tab === 'new' ? <ManualInvoice /> : tab === 'received' ? <Received /> : tab === 'reports' ? <Reports /> : <Config />}
     </div>
   );
 }
@@ -43,6 +47,7 @@ function Documents() {
   const [docType, setDocType] = useState('');
   const [open, setOpen] = useState<any>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null);
   const qs = `${range.query}${q ? `&q=${encodeURIComponent(q)}` : ''}${status ? `&status=${status}` : ''}${docType ? `&doc_type=${docType}` : ''}`;
   const { data, loading, reload } = useAsync(() => boApi<{ rows: any[]; counts: Record<string, number> }>(`/hacienda/documents?${qs}`), [qs]);
   // Keep statuses fresh while documents are on their way to Hacienda
@@ -92,10 +97,10 @@ function Documents() {
   return (
     <>
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {[['accepted', 'Aceptados', 'text-emerald-600'], ['sent', 'En proceso', 'text-sky-600'], ['pending', 'Pendientes', 'text-amber-600'], ['rejected', 'Rechazados', 'text-rose-600'], ['error', 'Con error', 'text-rose-600']].map(([k, l, c]) => (
+        {[['accepted', 'Aceptados', 'text-emerald-600'], ['signed,sent,processing', 'En proceso', 'text-sky-600'], ['pending', 'En cola', 'text-amber-600'], ['rejected', 'Rechazados', 'text-rose-600'], ['error,validation_failed,auth_error,manual_review', 'Con error / revisión', 'text-rose-600']].map(([k, l, c]) => (
           <button key={k} onClick={() => setStatus(status === k ? '' : k)} className={`card p-3 text-left ${status === k ? 'ring-2 ring-brand-500' : ''}`}>
             <div className="text-xs text-slate-500">{l}</div>
-            <div className={`text-2xl font-bold ${c}`}>{counts[k] || 0}</div>
+            <div className={`text-2xl font-bold ${c}`}>{k.split(',').reduce((s, x) => s + (counts[x] || 0), 0)}</div>
           </button>
         ))}
       </div>
@@ -116,7 +121,7 @@ function Documents() {
               {data.rows.map((d) => (
                 <tr key={d.id} className={d.replaced_by ? 'opacity-60' : ''}>
                   <td>
-                    <div className="font-medium">{EDOC_NAMES[d.doc_type]}{d.environment === 'stag' && <span className="ml-1 text-xs text-amber-600">pruebas</span>}</div>
+                    <button className="text-left font-medium hover:underline" onClick={() => setDetail(d.id)}>{EDOC_NAMES[d.doc_type]}{d.environment === 'stag' && <span className="ml-1 text-xs text-amber-600">pruebas</span>}</button>
                     <div className="font-mono text-xs text-slate-500">{fmtConsecutivo(d.consecutivo)}</div>
                     {d.reference?.clave && <div className="text-xs text-slate-400">Ref. {fmtConsecutivo(d.reference.clave.slice(21, 41))}</div>}
                   </td>
@@ -138,10 +143,10 @@ function Documents() {
                     {d.source !== 'pos' && d.doc_type !== '03' && !d.annulled_by && !d.replaced_by && d.status !== 'rejected' && can('settings.manage') && (
                       <button className="btn-secondary ml-1 px-2 py-1 text-xs text-rose-600" disabled={!!busy} onClick={() => annul(d)}><Ban size={12} />Anular</button>
                     )}
-                    {(d.status === 'error' || d.status === 'pending') && !d.replaced_by && (
+                    {['error', 'pending', 'validation_failed', 'auth_error', 'manual_review'].includes(d.status) && !d.replaced_by && (
                       <button className="btn-secondary px-2 py-1 text-xs" disabled={!!busy} onClick={() => act(d, 'retry')}><RefreshCw size={12} />Reintentar</button>
                     )}
-                    {(d.status === 'rejected' || d.status === 'error') && !d.replaced_by && can('settings.manage') && (
+                    {['rejected', 'error', 'validation_failed'].includes(d.status) && !d.replaced_by && can('settings.manage') && (
                       <button className="btn-secondary ml-1 px-2 py-1 text-xs" disabled={!!busy} onClick={() => act(d, 'reissue')}>Reemitir</button>
                     )}
                     {d.status === 'accepted' && d.receptor?.email && (
@@ -154,6 +159,7 @@ function Documents() {
           </table>
         )}
       </div>
+      {detail && <DocumentDetail id={detail} onClose={() => setDetail(null)} onChanged={reload} />}
       {open && <SaleDetail sale={open} business={business} api={boApi} canRefund={can('pos.refund')} onChanged={(s) => { setOpen(s); reload(); }} onClose={() => setOpen(null)} />}
     </>
   );
@@ -189,7 +195,7 @@ function Config() {
     }
   };
   const FIELDS = ['environment', 'legal_name', 'trade_name', 'id_type', 'id_number', 'activity_code', 'provider_id', 'provincia', 'canton', 'distrito', 'barrio', 'otras_senas', 'phone', 'email', 'default_cabys', 'resolution_text', 'api_username',
-    'terminal', 'usd_rate_manual', 'imap_host', 'imap_port', 'imap_user', 'expense_category'];
+    'terminal', 'usd_rate_manual', 'imap_host', 'imap_port', 'imap_user', 'expense_category', 'registro_fiscal_8707'];
   const save = () => run('save', async () => {
     const body: any = Object.fromEntries(FIELDS.map((f) => [f, s[f] ?? '']));
     body.auto_accept = !!s.auto_accept;
@@ -261,6 +267,7 @@ function Config() {
           <Field label="Teléfono"><input className="input" value={s.phone || ''} onChange={set('phone')} /></Field>
           <Field label="Correo del emisor"><input className="input" type="email" value={s.email || ''} onChange={set('email')} /></Field>
         </div>
+        <Field label="Registro fiscal de bebidas alcohólicas (Ley 8707)" hint="Obligatorio en los comprobantes con bebidas alcohólicas (cerveza, licores…)"><input className="input" maxLength={12} value={s.registro_fiscal_8707 || ''} onChange={set('registro_fiscal_8707')} /></Field>
       </div>
 
       <div className="space-y-4">
@@ -330,8 +337,10 @@ function Config() {
           <Toggle checked={!!s.auto_accept} onChange={(v) => setS({ ...s, auto_accept: v })} label="Aceptar automáticamente ante Hacienda las facturas recibidas" />
         </div>
         <Sequences />
+        <Branches />
         <button className="btn-primary w-full" disabled={busy === 'save'} onClick={save}>Guardar configuración</button>
       </div>
+      <CabysSetup />
     </div>
   );
 }

@@ -71,7 +71,7 @@ By default the system runs for one business, **Hotel Rio Lindo**: public sign-up
 
 ## Costa Rica electronic invoicing (Hacienda v4.4)
 
-Back Office → **Hacienda**.
+Back Office → **Hacienda**. Full documentation of the native Hacienda engine (PRD "ITS POS – Direct Costa Rica Hacienda Integration"): [docs/hacienda](docs/hacienda) — [API](docs/hacienda/API.md), [operations & runbook](docs/hacienda/OPERATIONS.md), [guía del administrador](docs/hacienda/GUIA_ADMINISTRADOR.md), [PRD compliance matrix](docs/hacienda/PRD_COMPLIANCE.md).
 
 * **Every sale** issues a *tiquete electrónico* (04). Its consecutivo (`001-00001-04-0000000001`) and 50-digit clave are reserved inside the sale transaction and printed on the receipt immediately.
 * **Factura electrónica** (01): tick *Factura electrónica* on the POS payment screen and enter the customer's identification (física 9 digits, jurídica 10, DIMEX 11–12, NITE 10), name and e-mail. The details are saved on the customer for next time. For a sale that already has a tiquete, open the receipt → *Factura electrónica (datos del cliente)*: the tiquete is annulled with a nota de crédito and a factura is issued in its place.

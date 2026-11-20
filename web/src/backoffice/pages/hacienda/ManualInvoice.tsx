@@ -11,7 +11,7 @@ const emptyLine = (): Line => ({ cabys: '', name: '', qty: '1', unit: 'Unid', pr
 const UNITS: [string, string][] = [['Unid', 'Unidad'], ['Sp', 'Servicio'], ['d', 'Día / noche'], ['h', 'Hora'], ['kg', 'Kilogramo'], ['L', 'Litro'], ['Os', 'Otro servicio']];
 const RATES = ['13', '8', '4', '2', '1', '0.5', '0'];
 const PAYMENTS: [string, string][] = [['cash', 'Efectivo'], ['card', 'Tarjeta'], ['sinpe', 'SINPE Móvil'], ['bank', 'Transferencia'], ['other', 'Otro']];
-export const fmtCur = (n: number, cur: string) => `${cur === 'USD' ? 'US$' : '₡'}${(Number(n) || 0).toLocaleString('es-CR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const fmtCur = (n: number, cur: string) => `${Number(n) < 0 ? '-' : ''}${cur === 'USD' ? 'US$' : '₡'}${Math.abs(Number(n) || 0).toLocaleString('es-CR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function ManualInvoice({ onIssued }: { onIssued?: () => void }) {
   const toast = useToast();

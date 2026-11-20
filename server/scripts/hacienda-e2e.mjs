@@ -106,8 +106,8 @@ ok(t1.status === 201 && te?.doc_type === '04', 'sale issues a tiquete electróni
 ok(/^\d{50}$/.test(te?.clave) && te.clave.startsWith('506') && te.clave.slice(9, 21) === '003101123456', `clave has 50 digits with the hotel's cédula (${te?.clave})`);
 ok(/^0010000104\d{10}$/.test(te?.consecutivo), `consecutivo 001-00001-04-… (${te?.consecutivo})`);
 ok(te.clave.slice(21, 41) === te.consecutivo && te.clave[41] === '1', 'clave embeds the consecutivo and situación normal');
-let s1 = await waitDoc(t1.data.id, C, (d) => d[0]?.status === 'error');
-ok(s1.e_documents[0].status === 'error' && /CABYS/.test(s1.e_documents[0].message), 'missing CABYS code is reported, not silently sent', s1.e_documents[0]);
+let s1 = await waitDoc(t1.data.id, C, (d) => d[0]?.status === 'validation_failed');
+ok(s1.e_documents[0].status === 'validation_failed' && /CABYS/.test(s1.e_documents[0].message), 'missing CABYS code stops the document before signing (validation failed)', s1.e_documents[0]);
 await api('PUT', '/hacienda/settings', { default_cabys: '6331000000100' }, O);
 const retry = await api('POST', `/hacienda/documents/${te.id}/retry`, {}, O);
 ok(retry.status === 200, 'retry after fixing the CABYS code', retry.data);

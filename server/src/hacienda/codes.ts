@@ -2,15 +2,23 @@
  * Costa Rica electronic invoicing (Ministerio de Hacienda, comprobantes electrónicos v4.4) — codes and numbering.
  * Code lists are taken from the official v4.4 XSDs (cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/).
  */
-export type DocType = '01' | '03' | '04';
-export const DOC_NAMES: Record<DocType, string> = { '01': 'Factura electrónica', '03': 'Nota de crédito electrónica', '04': 'Tiquete electrónico' };
-export const DOC_SHORT: Record<DocType, string> = { '01': 'FE', '03': 'NC', '04': 'TE' };
-export const ROOT: Record<DocType, string> = { '01': 'FacturaElectronica', '03': 'NotaCreditoElectronica', '04': 'TiqueteElectronico' };
+export type DocType = '01' | '02' | '03' | '04';
+export const DOC_NAMES: Record<DocType, string> = { '01': 'Factura electrónica', '02': 'Nota de débito electrónica', '03': 'Nota de crédito electrónica', '04': 'Tiquete electrónico' };
+export const DOC_SHORT: Record<DocType, string> = { '01': 'FE', '02': 'ND', '03': 'NC', '04': 'TE' };
+export const ROOT: Record<DocType, string> = { '01': 'FacturaElectronica', '02': 'NotaDebitoElectronica', '03': 'NotaCreditoElectronica', '04': 'TiqueteElectronico' };
 const NS_BASE = 'https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/';
 export const NAMESPACE: Record<DocType, string> = {
   '01': NS_BASE + 'facturaElectronica',
+  '02': NS_BASE + 'notaDebitoElectronica',
   '03': NS_BASE + 'notaCreditoElectronica',
   '04': NS_BASE + 'tiqueteElectronico',
+};
+/** Version of the document/tax rules implemented by this engine (stored on every document). */
+export const RULES_VERSION = 'CR-4.4-2026.11';
+/** Reference codes (InformacionReferencia/Codigo, v4.4). */
+export const REF_CODES: Record<string, string> = {
+  '01': 'Anula documento de referencia', '02': 'Corrige texto de documento de referencia', '04': 'Referencia a otro documento',
+  '05': 'Sustituye comprobante provisional por contingencia', '06': 'Devolución de mercancía', '07': 'Sustituye comprobante electrónico', '99': 'Otros',
 };
 /** Printed on receipts; editable in Settings → Hacienda. */
 export const DEFAULT_RESOLUTION = 'Autorizado mediante resolución MH-DGT-RES-0027-2024 · Comprobantes electrónicos v4.4';
