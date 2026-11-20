@@ -10,3 +10,7 @@ server/data/
 *.xlsx
 *.xls
 *PRD*.pdf
+
+# Cryptographic keys (.p12 llave criptográfica) - never commit
+*.p12
+*.pfx
